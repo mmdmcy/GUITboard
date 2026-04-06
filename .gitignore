@@ -1,0 +1,35 @@
+# Build outputs
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/bin/
+/build/
+/dist/
+/release/
+/coverage/
+coverage.out
+
+# Go workspace noise
+.coverprofile
+
+# Fyne and packaging artifacts
+/fyne-cross/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Editors and IDEs
+.idea/
+.vscode/
+*.code-workspace
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+Desktop.ini
