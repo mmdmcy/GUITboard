@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -54,6 +55,7 @@ type dashboard struct {
 	pushButton       *widget.Button
 	commitPushButton *widget.Button
 	refreshButton    *widget.Button
+	cloneButton      *widget.Button
 	bulkCommitButton *widget.Button
 	pullAllButton    *widget.Button
 }
@@ -66,6 +68,11 @@ func Run() error {
 
 	if strings.TrimSpace(cfg.RootPath) == "" {
 		cfg.RootPath = defaultRootPath()
+		if cfg.RootPath != "" {
+			if err := os.MkdirAll(cfg.RootPath, 0o755); err == nil {
+				_ = config.Save(cfg)
+			}
+		}
 	}
 
 	application := app.NewWithID("local.guitboard")
@@ -243,6 +250,8 @@ func (d *dashboard) buildUI() {
 		d.refresh(true)
 	})
 
+	d.cloneButton = widget.NewButtonWithIcon("Clone GitHub Repo...", theme.DownloadIcon(), d.promptCloneRepo)
+
 	d.bulkCommitButton = widget.NewButton("Commit + Push Changed Repos...", func() {
 		d.promptBulkCommit()
 	})
@@ -261,6 +270,7 @@ func (d *dashboard) content() fyne.CanvasObject {
 		d.rootLabel,
 		container.NewHBox(
 			widget.NewButtonWithIcon("Choose Folder", theme.FolderOpenIcon(), d.chooseFolder),
+			d.cloneButton,
 			d.refreshButton,
 			layout.NewSpacer(),
 			d.pullAllButton,
@@ -361,6 +371,111 @@ func (d *dashboard) chooseFolder() {
 	}
 
 	picker.Show()
+}
+
+func (d *dashboard) promptCloneRepo() {
+	root, err := d.cloneRootPath()
+	if err != nil {
+		dialog.ShowError(err, d.win)
+		return
+	}
+
+	sourceEntry := widget.NewEntry()
+	sourceEntry.SetPlaceHolder("owner/repo or https://github.com/owner/repo.git")
+
+	folderEntry := widget.NewEntry()
+	folderEntry.SetPlaceHolder("Optional. Defaults to the repository name")
+
+	destinationLabel := widget.NewLabel(root)
+	destinationLabel.Wrapping = fyne.TextWrapWord
+
+	dialog.ShowForm(
+		"Clone GitHub repository",
+		"Clone",
+		"Cancel",
+		[]*widget.FormItem{
+			widget.NewFormItem("Destination", destinationLabel),
+			widget.NewFormItem("Repository", sourceEntry),
+			widget.NewFormItem("Folder name", folderEntry),
+		},
+		func(confirm bool) {
+			if !confirm {
+				return
+			}
+			d.runCloneRepo(sourceEntry.Text, folderEntry.Text)
+		},
+		d.win,
+	)
+}
+
+func (d *dashboard) runCloneRepo(source, dirName string) {
+	if d.isActing || d.isScanning {
+		return
+	}
+
+	if strings.TrimSpace(source) == "" {
+		dialog.ShowError(fmt.Errorf("repository URL cannot be empty"), d.win)
+		return
+	}
+
+	root, err := d.cloneRootPath()
+	if err != nil {
+		dialog.ShowError(err, d.win)
+		return
+	}
+
+	displayName := strings.TrimSpace(dirName)
+	if displayName == "" {
+		displayName = gitops.DefaultCloneDirName(source)
+	}
+	if displayName == "" {
+		displayName = strings.TrimSpace(source)
+	}
+
+	d.isActing = true
+	d.updateActionState()
+	d.setStatus(fmt.Sprintf("Cloning %s into %s ...", source, root))
+
+	progress := dialog.NewProgressInfinite("Clone repository", fmt.Sprintf("Cloning into %s", root), d.win)
+	progress.Show()
+
+	go func() {
+		targetPath, output, err := gitops.Clone(source, root, dirName)
+		fyne.Do(func() {
+			progress.Hide()
+			d.isActing = false
+			d.updateActionState()
+
+			if targetPath == "" && displayName != "" {
+				targetPath = filepath.Join(root, displayName)
+			}
+
+			repo := gitops.Repo{
+				Name: displayName,
+				Path: targetPath,
+			}
+			if repo.Name == "" && targetPath != "" {
+				repo.Name = filepath.Base(targetPath)
+			}
+			if repo.Name == "" {
+				repo.Name = strings.TrimSpace(source)
+			}
+			if repo.Path == "" {
+				repo.Path = root
+			}
+
+			d.appendLog("Clone", repo, output, err)
+			if err != nil {
+				dialog.ShowError(err, d.win)
+				d.setStatus(fmt.Sprintf("Clone failed for %s", repo.Name))
+			} else {
+				d.selectedPath = targetPath
+				d.setStatus(fmt.Sprintf("Clone finished for %s", repo.Name))
+			}
+
+			d.refresh(false)
+		})
+	}()
 }
 
 func (d *dashboard) refresh(showProgress bool) {
@@ -775,6 +890,7 @@ func (d *dashboard) updateActionState() {
 	setEnabled(d.pullButton, repoSelected && repo.Upstream != "" && !repo.UpstreamGone && !busy)
 	setEnabled(d.pushButton, repoSelected && repo.Remote != "" && !busy)
 	setEnabled(d.refreshButton, !busy)
+	setEnabled(d.cloneButton, !busy)
 	setEnabled(d.bulkCommitButton, hasDirtyRepos && !busy)
 	setEnabled(d.pullAllButton, hasPullableRepos && !busy)
 }
@@ -809,18 +925,58 @@ func defaultRootPath() string {
 		return ""
 	}
 
-	candidates := []string{
-		filepath.Join(home, "Documents", "GitHub"),
-		filepath.Join(home, "GitHub"),
-		filepath.Join(home, "source", "repos"),
-	}
+	candidates := rootPathCandidates(home)
 	for _, candidate := range candidates {
 		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
 			return candidate
 		}
 	}
 
-	return ""
+	if len(candidates) == 0 {
+		return ""
+	}
+
+	return candidates[0]
+}
+
+func (d *dashboard) cloneRootPath() (string, error) {
+	root := strings.TrimSpace(d.cfg.RootPath)
+	if root == "" {
+		root = defaultRootPath()
+	}
+	if root == "" {
+		return "", fmt.Errorf("unable to determine a repository root folder")
+	}
+
+	root = filepath.Clean(root)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return "", err
+	}
+
+	if d.cfg.RootPath != root {
+		d.cfg.RootPath = root
+		_ = config.Save(d.cfg)
+	}
+	d.rootLabel.SetText(root)
+
+	return root, nil
+}
+
+func rootPathCandidates(home string) []string {
+	if runtime.GOOS == "windows" {
+		return []string{
+			filepath.Join(home, "Documents", "GitHub"),
+			filepath.Join(home, "source", "repos"),
+			filepath.Join(home, "GitHub"),
+		}
+	}
+
+	return []string{
+		filepath.Join(home, "Documents", "github"),
+		filepath.Join(home, "Documents", "GitHub"),
+		filepath.Join(home, "github"),
+		filepath.Join(home, "GitHub"),
+	}
 }
 
 func metadataRow(label string, value fyne.CanvasObject) fyne.CanvasObject {

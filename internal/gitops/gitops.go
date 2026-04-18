@@ -252,10 +252,19 @@ func CommitAndPush(repoPath, message string) (string, error) {
 }
 
 func RunGit(repoPath string, args ...string) (string, error) {
+	return runGitCommand(repoPath, args...)
+}
+
+func runGitCommand(repoPath string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repoPath}, args...)...)
+	cmdArgs := args
+	if strings.TrimSpace(repoPath) != "" {
+		cmdArgs = append([]string{"-C", repoPath}, args...)
+	}
+
+	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 
 	output, err := cmd.CombinedOutput()

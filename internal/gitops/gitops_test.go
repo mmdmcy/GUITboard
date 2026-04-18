@@ -59,9 +59,85 @@ func TestScanSortsByLatestDirtyActivity(t *testing.T) {
 	}
 }
 
+func TestCloneClonesRepositoryIntoConfiguredRoot(t *testing.T) {
+	remotePath := createBareRemoteRepo(t)
+	root := t.TempDir()
+
+	targetPath, _, err := Clone(remotePath, root, "")
+	if err != nil {
+		t.Fatalf("Clone returned error: %v", err)
+	}
+
+	expectedPath := filepath.Join(root, "remote")
+	if targetPath != expectedPath {
+		t.Fatalf("expected clone target %s, got %s", expectedPath, targetPath)
+	}
+
+	repo := Inspect(targetPath)
+	if repo.LastCommitMessage != "Initial commit" {
+		t.Fatalf("expected cloned repo to contain initial commit, got %q", repo.LastCommitMessage)
+	}
+	if repo.Remote != remotePath {
+		t.Fatalf("expected cloned repo remote %q, got %q", remotePath, repo.Remote)
+	}
+}
+
+func TestDefaultCloneDirNameSupportsGitHubInputs(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		want   string
+	}{
+		{name: "shorthand", source: "owner/repo", want: "repo"},
+		{name: "https", source: "https://github.com/owner/repo.git", want: "repo"},
+		{name: "ssh", source: "git@github.com:owner/repo.git", want: "repo"},
+		{name: "github host without scheme", source: "github.com/owner/repo", want: "repo"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := DefaultCloneDirName(test.source); got != test.want {
+				t.Fatalf("expected %q, got %q", test.want, got)
+			}
+		})
+	}
+}
+
+func TestCloneRejectsNestedFolderName(t *testing.T) {
+	remotePath := createBareRemoteRepo(t)
+	root := t.TempDir()
+
+	if _, _, err := Clone(remotePath, root, "../bad"); err == nil {
+		t.Fatal("expected Clone to reject a nested folder name")
+	}
+}
+
 func createTestRepo(t *testing.T, name string) string {
 	t.Helper()
 	return createRepoAt(t, filepath.Join(t.TempDir(), name))
+}
+
+func createBareRemoteRepo(t *testing.T) string {
+	t.Helper()
+
+	workRepo := createTestRepo(t, "source")
+	writeFile(t, filepath.Join(workRepo, "README.md"), "# cloned test\n")
+	if _, err := CommitAll(workRepo, "Initial commit"); err != nil {
+		t.Fatalf("failed to create initial commit: %v", err)
+	}
+
+	remotePath := filepath.Join(t.TempDir(), "remote.git")
+	if _, err := RunGit("", "init", "--bare", remotePath); err != nil {
+		t.Fatalf("failed to create bare remote: %v", err)
+	}
+	if _, err := RunGit(workRepo, "remote", "add", "origin", remotePath); err != nil {
+		t.Fatalf("failed to add origin remote: %v", err)
+	}
+	if _, err := RunGit(workRepo, "push", "-u", "origin", "HEAD"); err != nil {
+		t.Fatalf("failed to push initial commit: %v", err)
+	}
+
+	return filepath.Clean(remotePath)
 }
 
 func createRepoAt(t *testing.T, repoPath string) string {
