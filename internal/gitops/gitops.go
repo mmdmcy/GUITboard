@@ -233,8 +233,43 @@ func Pull(repoPath string) (string, error) {
 	return RunGit(repoPath, "pull", "--ff-only")
 }
 
+func Fetch(repoPath string) (string, error) {
+	return RunGit(repoPath, "fetch", "--all", "--prune")
+}
+
 func Push(repoPath string) (string, error) {
 	return RunGit(repoPath, "push")
+}
+
+func Sync(repo Repo) (string, error) {
+	var parts []string
+
+	fetchOutput, err := Fetch(repo.Path)
+	if fetchOutput != "" {
+		parts = append(parts, fetchOutput)
+	}
+	if err != nil {
+		return trimOutput(strings.Join(parts, "\n")), err
+	}
+
+	switch {
+	case repo.Upstream == "":
+		parts = append(parts, "Fetched remotes. Skipped fast-forward because no upstream branch is configured.")
+		return trimOutput(strings.Join(parts, "\n")), nil
+	case repo.UpstreamGone:
+		parts = append(parts, "Fetched remotes. Skipped fast-forward because the upstream branch is missing.")
+		return trimOutput(strings.Join(parts, "\n")), nil
+	case repo.Dirty:
+		parts = append(parts, "Fetched remotes. Skipped fast-forward because the working tree has local changes.")
+		return trimOutput(strings.Join(parts, "\n")), nil
+	}
+
+	pullOutput, err := Pull(repo.Path)
+	if pullOutput != "" {
+		parts = append(parts, pullOutput)
+	}
+
+	return trimOutput(strings.Join(parts, "\n")), err
 }
 
 func CommitAndPush(repoPath, message string) (string, error) {

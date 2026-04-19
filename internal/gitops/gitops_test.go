@@ -115,6 +115,62 @@ func TestCloneRejectsNestedFolderName(t *testing.T) {
 	}
 }
 
+func TestSyncFetchesAndFastForwardsCleanRepo(t *testing.T) {
+	workRepo, remotePath, clonePath := createRemoteClonePair(t)
+
+	writeFile(t, filepath.Join(workRepo, "feature.txt"), "remote update\n")
+	if _, err := CommitAll(workRepo, "Remote update"); err != nil {
+		t.Fatalf("failed to create remote update: %v", err)
+	}
+	if _, err := RunGit(workRepo, "push"); err != nil {
+		t.Fatalf("failed to push remote update to %s: %v", remotePath, err)
+	}
+
+	repo := Inspect(clonePath)
+	if _, err := Sync(repo); err != nil {
+		t.Fatalf("Sync returned error: %v", err)
+	}
+
+	updated := Inspect(clonePath)
+	if updated.LastCommitMessage != "Remote update" {
+		t.Fatalf("expected clone to fast-forward to the remote update, got %q", updated.LastCommitMessage)
+	}
+	if updated.Dirty {
+		t.Fatal("expected clone to stay clean after Sync")
+	}
+}
+
+func TestSyncSkipsFastForwardWhenRepoIsDirty(t *testing.T) {
+	workRepo, _, clonePath := createRemoteClonePair(t)
+
+	writeFile(t, filepath.Join(workRepo, "feature.txt"), "remote update\n")
+	if _, err := CommitAll(workRepo, "Remote update"); err != nil {
+		t.Fatalf("failed to create remote update: %v", err)
+	}
+	if _, err := RunGit(workRepo, "push"); err != nil {
+		t.Fatalf("failed to push remote update: %v", err)
+	}
+
+	writeFile(t, filepath.Join(clonePath, "local.txt"), "local change\n")
+
+	repo := Inspect(clonePath)
+	output, err := Sync(repo)
+	if err != nil {
+		t.Fatalf("expected Sync to fetch and skip fast-forward cleanly, got %v", err)
+	}
+	if !strings.Contains(output, "Skipped fast-forward") {
+		t.Fatalf("expected Sync output to explain the skip, got %q", output)
+	}
+
+	updated := Inspect(clonePath)
+	if updated.LastCommitMessage != "Initial commit" {
+		t.Fatalf("expected clone to stay on the initial commit, got %q", updated.LastCommitMessage)
+	}
+	if !updated.Dirty {
+		t.Fatal("expected clone to remain dirty after Sync skips the pull")
+	}
+}
+
 func TestListCloneableRepositoriesParsesAndSortsRepos(t *testing.T) {
 	original := ghCommandRunner
 	t.Cleanup(func() {
@@ -233,7 +289,7 @@ func createTestRepo(t *testing.T, name string) string {
 	return createRepoAt(t, filepath.Join(t.TempDir(), name))
 }
 
-func createBareRemoteRepo(t *testing.T) string {
+func createRemoteClonePair(t *testing.T) (string, string, string) {
 	t.Helper()
 
 	workRepo := createTestRepo(t, "source")
@@ -253,7 +309,20 @@ func createBareRemoteRepo(t *testing.T) string {
 		t.Fatalf("failed to push initial commit: %v", err)
 	}
 
-	return filepath.Clean(remotePath)
+	root := t.TempDir()
+	clonePath, _, err := Clone(remotePath, root, "")
+	if err != nil {
+		t.Fatalf("failed to clone remote for Sync tests: %v", err)
+	}
+
+	return workRepo, filepath.Clean(remotePath), clonePath
+}
+
+func createBareRemoteRepo(t *testing.T) string {
+	t.Helper()
+
+	_, remotePath, _ := createRemoteClonePair(t)
+	return remotePath
 }
 
 func createRepoAt(t *testing.T, repoPath string) string {

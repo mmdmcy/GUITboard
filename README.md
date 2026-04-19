@@ -1,17 +1,17 @@
 # GUITboard
 
-GUITboard is a local-only desktop dashboard for managing many Git repositories from one place on Windows and Linux Mint.
+GUITboard is a local-only terminal dashboard for managing a whole folder of Git repositories from one keyboard-first interface.
 
 ## Features
 
 - Scans a chosen root folder for nested Git repositories.
 - Sorts repositories by most recent activity so the busiest projects stay at the top.
-- Shows branch, upstream, ahead/behind, dirty state, and last commit details.
-- Browses the GitHub repositories available to your account before cloning, with search, SSH/HTTPS selection, and local duplicate hints.
-- Still supports pasting a custom Git URL when you want to clone something not listed in the browser.
-- Lets you `Stage All`, `Commit All`, `Pull`, `Push`, or `Commit + Push` from the GUI.
-- Supports bulk pull across all tracked repositories.
-- Supports bulk commit-and-push across every changed repository.
+- Shows branch, upstream, ahead/behind, dirty state, last commit details, and an operation log in one split dashboard.
+- Keeps every major workflow on the keyboard: arrow keys move around the dashboard and `Enter` runs the highlighted action.
+- Lets you `Stage`, `Commit`, `Commit+Push`, `Pull`, or `Push` the selected repository from a compact popup-driven flow.
+- Supports `Fetch All`, which fetches every repo with a remote and fast-forwards clean repos that have a usable upstream branch.
+- Supports bulk commit-and-push across every changed repository with one shared commit message.
+- Clones a repository into the current root from either a full Git URL or `owner/repo` shorthand.
 - Refreshes automatically every 30 seconds and stores the selected root folder locally per user.
 - Defaults to `Documents/GitHub` on Windows and `~/Documents/github` on Linux Mint.
 
@@ -19,21 +19,12 @@ GUITboard is a local-only desktop dashboard for managing many Git repositories f
 
 - Windows 11 or Windows 10, or Linux Mint
 - [Git](https://git-scm.com/)
-- [GitHub CLI](https://cli.github.com/) with `gh auth login` if you want the clone browser to list your GitHub repositories automatically
 - Go 1.25+ if you want to run or build from source
 
-### Linux Mint development prerequisites
+## Terminal Notes
 
-To run or build the app from source on Linux Mint, install Go from the official Go install guide and install the Linux graphics/toolchain packages required by Fyne:
-
-```bash
-sudo apt-get install gcc libgl1-mesa-dev xorg-dev libxkbcommon-dev
-```
-
-References:
-
-- https://go.dev/doc/install
-- https://docs.fyne.io/started/quick/
+- A terminal around `96x28` or larger gives the dashboard enough room to show the list, details, actions, and log together.
+- No GUI toolkit or desktop-specific graphics packages are required anymore.
 
 ## Run from source
 
@@ -68,10 +59,10 @@ Then launch the binary for your platform:
 ## How it works
 
 1. Start the app.
-2. Confirm the default root folder or click `Choose Folder`.
-3. Optional: click `Browse + Clone...` to load the repositories your GitHub account can clone, then select one from the list.
-4. If `gh` is not installed or logged in, paste a full Git URL in the clone browser instead.
-5. Select a repository in the dashboard list and use the action buttons on the right.
+2. Confirm the detected root folder or use the `Root` action to point GUITboard at another directory.
+3. Use the arrow keys to move between dashboard actions, the repository list, and the selected-repo action bar.
+4. Press `Enter` on `Commit+Push` or `Commit Dirty`, type the commit message in the popup, and GUITboard stages and runs the rest.
+5. Use `Fetch All` to refresh the whole folder, `Clone` to add another repo into the root, `/` to filter, `d` to toggle dirty-only mode, and `r` to refresh on demand.
 
 The app remembers the last folder you picked in your user config directory, so it works on any machine without hardcoded personal paths.
 

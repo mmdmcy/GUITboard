@@ -11,55 +11,105 @@ import (
 	"guitboard/internal/config"
 	"guitboard/internal/gitops"
 
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/app"
-	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/layout"
-	"fyne.io/fyne/v2/storage"
-	"fyne.io/fyne/v2/theme"
-	"fyne.io/fyne/v2/widget"
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
-type dashboard struct {
-	app         fyne.App
-	win         fyne.Window
-	cloneWindow fyne.Window
+type focusArea int
 
-	cfg          config.Config
+const (
+	focusGlobalActions focusArea = iota
+	focusRepoList
+	focusRepoActions
+)
+
+type modalKind int
+
+const (
+	modalFilter modalKind = iota
+	modalRoot
+	modalCommitOnly
+	modalCommitAndPush
+	modalBulkCommit
+	modalClone
+)
+
+type globalAction int
+
+const (
+	globalActionChangeRoot globalAction = iota
+	globalActionRefresh
+	globalActionFilter
+	globalActionDirtyOnly
+	globalActionClone
+	globalActionFetchAll
+	globalActionBulkCommit
+)
+
+type repoAction int
+
+const (
+	repoActionStageAll repoAction = iota
+	repoActionCommitPush
+	repoActionCommitOnly
+	repoActionPull
+	repoActionPush
+)
+
+type actionButton struct {
+	label   string
+	enabled bool
+}
+
+type modalState struct {
+	kind        modalKind
+	title       string
+	prompt      string
+	placeholder string
+	repo        gitops.Repo
+	input       textinput.Model
+}
+
+type dashboardModel struct {
+	cfg config.Config
+
 	repos        []gitops.Repo
 	filtered     []gitops.Repo
 	selectedPath string
-	isScanning   bool
-	isActing     bool
+	selectedIdx  int
+	repoScroll   int
 
-	rootLabel        *widget.Label
-	statusLabel      *widget.Label
-	searchEntry      *widget.Entry
-	changedOnly      *widget.Check
-	list             *widget.List
-	logEntry         *widget.Entry
-	detailName       *widget.Label
-	detailPath       *widget.Label
-	detailBranch     *widget.Label
-	detailRemote     *widget.Label
-	detailCommit     *widget.Label
-	detailActivity   *widget.Label
-	detailStatus     *widget.Label
-	totalValue       *widget.Label
-	dirtyValue       *widget.Label
-	aheadValue       *widget.Label
-	behindValue      *widget.Label
-	stageButton      *widget.Button
-	commitButton     *widget.Button
-	pullButton       *widget.Button
-	pushButton       *widget.Button
-	commitPushButton *widget.Button
-	refreshButton    *widget.Button
-	cloneButton      *widget.Button
-	bulkCommitButton *widget.Button
-	pullAllButton    *widget.Button
+	filterQuery string
+	dirtyOnly   bool
+
+	focus           focusArea
+	globalActionIdx int
+	repoActionIdx   int
+	modal           *modalState
+	logs            []string
+	status          string
+	busy            bool
+	busyLabel       string
+	spinner         spinner.Model
+	width           int
+	height          int
 }
+
+type scanFinishedMsg struct {
+	repos []gitops.Repo
+	err   error
+}
+
+type operationFinishedMsg struct {
+	status       string
+	logs         []string
+	refresh      bool
+	selectedPath string
+}
+
+type refreshTickMsg time.Time
 
 func Run() error {
 	cfg, err := config.Load()
@@ -67,459 +117,482 @@ func Run() error {
 		cfg = config.Default()
 	}
 
-	if strings.TrimSpace(cfg.RootPath) == "" {
-		cfg.RootPath = defaultRootPath()
-		if cfg.RootPath != "" {
-			if err := os.MkdirAll(cfg.RootPath, 0o755); err == nil {
-				_ = config.Save(cfg)
-			}
-		}
+	root, err := ensureRootPath(cfg.RootPath)
+	if err != nil {
+		return err
+	}
+	if root != cfg.RootPath {
+		cfg.RootPath = root
+		_ = config.Save(cfg)
 	}
 
-	application := app.NewWithID("local.guitboard")
-	window := application.NewWindow("GUITboard")
+	model := newDashboardModel(cfg)
+	program := tea.NewProgram(model, tea.WithAltScreen())
 
-	d := &dashboard{
-		app: application,
-		win: window,
-		cfg: cfg,
-	}
-
-	d.buildUI()
-
-	window.Resize(fyne.NewSize(cfg.WindowWidth, cfg.WindowHeight))
-	window.SetContent(d.content())
-	window.SetMaster()
-	window.SetCloseIntercept(func() {
-		size := window.Canvas().Size()
-		d.cfg.WindowWidth = size.Width
-		d.cfg.WindowHeight = size.Height
-		d.cfg.LastOpened = time.Now()
-		_ = config.Save(d.cfg)
-		window.Close()
-	})
-
-	d.applyFilters()
-	d.refresh(false)
-	d.startAutoRefresh()
-
-	window.ShowAndRun()
-	return nil
+	_, err = program.Run()
+	return err
 }
 
-func (d *dashboard) buildUI() {
-	d.rootLabel = widget.NewLabel("")
-	d.rootLabel.Wrapping = fyne.TextWrapWord
+func newDashboardModel(cfg config.Config) dashboardModel {
+	spin := spinner.New()
+	spin.Spinner = spinner.MiniDot
+	spin.Style = styles.spinner
 
-	d.statusLabel = widget.NewLabel("Ready")
-	d.statusLabel.Wrapping = fyne.TextWrapWord
-
-	d.searchEntry = widget.NewEntry()
-	d.searchEntry.SetPlaceHolder("Filter by repo name, path, branch, or remote...")
-	d.searchEntry.OnChanged = func(string) {
-		d.applyFilters()
+	model := dashboardModel{
+		cfg:             cfg,
+		focus:           focusRepoList,
+		selectedIdx:     -1,
+		spinner:         spin,
+		status:          "Use the dashboard actions to refresh, filter, clone, or sync repositories.",
+		width:           80,
+		height:          24,
+		globalActionIdx: int(globalActionRefresh),
+		repoActionIdx:   int(repoActionCommitPush),
 	}
 
-	d.changedOnly = widget.NewCheck("Only show repos with changes", func(bool) {
-		d.applyFilters()
-	})
-
-	d.totalValue = widget.NewLabel("0")
-	d.dirtyValue = widget.NewLabel("0")
-	d.aheadValue = widget.NewLabel("0")
-	d.behindValue = widget.NewLabel("0")
-
-	d.detailName = widget.NewLabel("Select a repository")
-	d.detailName.TextStyle = fyne.TextStyle{Bold: true}
-
-	d.detailPath = widget.NewLabel("-")
-	d.detailPath.Wrapping = fyne.TextWrapWord
-	d.detailBranch = widget.NewLabel("-")
-	d.detailBranch.Wrapping = fyne.TextWrapWord
-	d.detailRemote = widget.NewLabel("-")
-	d.detailRemote.Wrapping = fyne.TextWrapWord
-	d.detailCommit = widget.NewLabel("-")
-	d.detailCommit.Wrapping = fyne.TextWrapWord
-	d.detailActivity = widget.NewLabel("-")
-	d.detailActivity.Wrapping = fyne.TextWrapWord
-	d.detailStatus = widget.NewLabel("-")
-	d.detailStatus.Wrapping = fyne.TextWrapWord
-
-	d.logEntry = widget.NewMultiLineEntry()
-	d.logEntry.Wrapping = fyne.TextWrapWord
-	d.logEntry.SetMinRowsVisible(12)
-	d.logEntry.Disable()
-	d.logEntry.SetText("Operation output will appear here.\n")
-
-	d.list = widget.NewList(
-		func() int {
-			return len(d.filtered)
-		},
-		func() fyne.CanvasObject {
-			name := widget.NewLabel("Repository")
-			name.TextStyle = fyne.TextStyle{Bold: true}
-
-			path := widget.NewLabel("Path")
-			path.Wrapping = fyne.TextWrapWord
-
-			meta := widget.NewLabel("Status")
-			meta.Wrapping = fyne.TextWrapWord
-
-			return container.NewVBox(name, path, meta)
-		},
-		func(id widget.ListItemID, item fyne.CanvasObject) {
-			if id < 0 || id >= len(d.filtered) {
-				return
-			}
-
-			repo := d.filtered[id]
-			objects := item.(*fyne.Container).Objects
-
-			nameLabel := objects[0].(*widget.Label)
-			pathLabel := objects[1].(*widget.Label)
-			metaLabel := objects[2].(*widget.Label)
-
-			nameLabel.SetText(repo.Name)
-			pathLabel.SetText(repo.Path)
-			metaLabel.SetText(repoListSummary(repo))
-		},
-	)
-
-	d.list.OnSelected = func(id widget.ListItemID) {
-		if id < 0 || id >= len(d.filtered) {
-			return
-		}
-		d.selectedPath = d.filtered[id].Path
-		d.refreshDetails()
+	if strings.TrimSpace(cfg.RootPath) != "" {
+		model.busy = true
+		model.busyLabel = fmt.Sprintf("Scanning %s ...", cfg.RootPath)
+		model.status = model.busyLabel
 	}
 
-	d.stageButton = widget.NewButtonWithIcon("Stage All", theme.ContentAddIcon(), func() {
-		repo, ok := d.selectedRepo()
-		if !ok {
-			return
-		}
-		d.runRepoAction(repo, "Stage All", func() (string, error) {
-			return gitops.StageAll(repo.Path)
-		})
-	})
-
-	d.commitButton = widget.NewButton("Commit All...", func() {
-		repo, ok := d.selectedRepo()
-		if !ok {
-			return
-		}
-		d.promptCommitMessage("Commit all changes", repo.Name, func(message string) {
-			d.runRepoAction(repo, "Commit All", func() (string, error) {
-				return gitops.CommitAll(repo.Path, message)
-			})
-		})
-	})
-
-	d.pullButton = widget.NewButtonWithIcon("Pull", theme.DownloadIcon(), func() {
-		repo, ok := d.selectedRepo()
-		if !ok {
-			return
-		}
-		d.runRepoAction(repo, "Pull", func() (string, error) {
-			return gitops.Pull(repo.Path)
-		})
-	})
-
-	d.pushButton = widget.NewButtonWithIcon("Push", theme.UploadIcon(), func() {
-		repo, ok := d.selectedRepo()
-		if !ok {
-			return
-		}
-		d.runRepoAction(repo, "Push", func() (string, error) {
-			return gitops.Push(repo.Path)
-		})
-	})
-
-	d.commitPushButton = widget.NewButton("Commit + Push...", func() {
-		repo, ok := d.selectedRepo()
-		if !ok {
-			return
-		}
-		d.promptCommitMessage("Commit and push all changes", repo.Name, func(message string) {
-			d.runRepoAction(repo, "Commit + Push", func() (string, error) {
-				return gitops.CommitAndPush(repo.Path, message)
-			})
-		})
-	})
-
-	d.refreshButton = widget.NewButtonWithIcon("Refresh", theme.ViewRefreshIcon(), func() {
-		d.refresh(true)
-	})
-
-	d.cloneButton = widget.NewButtonWithIcon("Browse + Clone...", theme.DownloadIcon(), d.promptCloneRepo)
-
-	d.bulkCommitButton = widget.NewButton("Commit + Push Changed Repos...", func() {
-		d.promptBulkCommit()
-	})
-
-	d.pullAllButton = widget.NewButton("Pull All Repos", func() {
-		d.confirmPullAll()
-	})
-
-	d.updateActionState()
+	return model
 }
 
-func (d *dashboard) content() fyne.CanvasObject {
-	title := widget.NewLabelWithStyle("Local GitHub Dashboard", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-
-	rootCard := widget.NewCard("Repository root", "", container.NewVBox(
-		d.rootLabel,
-		container.NewHBox(
-			widget.NewButtonWithIcon("Choose Folder", theme.FolderOpenIcon(), d.chooseFolder),
-			d.cloneButton,
-			d.refreshButton,
-			layout.NewSpacer(),
-			d.pullAllButton,
-			d.bulkCommitButton,
-		),
-	))
-
-	summary := container.NewGridWithColumns(4,
-		widget.NewCard("Repositories", "", d.totalValue),
-		widget.NewCard("Dirty", "", d.dirtyValue),
-		widget.NewCard("Ahead", "", d.aheadValue),
-		widget.NewCard("Behind", "", d.behindValue),
-	)
-
-	leftPanel := container.NewBorder(
-		container.NewVBox(
-			rootCard,
-			summary,
-			widget.NewCard("Filter", "", container.NewVBox(d.searchEntry, d.changedOnly)),
-		),
-		nil,
-		nil,
-		nil,
-		d.list,
-	)
-
-	detailGrid := container.NewVBox(
-		d.detailName,
-		metadataRow("Path", d.detailPath),
-		metadataRow("Branch", d.detailBranch),
-		metadataRow("Remote", d.detailRemote),
-		metadataRow("Last commit", d.detailCommit),
-		metadataRow("Last activity", d.detailActivity),
-		metadataRow("Status", d.detailStatus),
-	)
-
-	actionBar := container.NewGridWithColumns(3,
-		d.stageButton,
-		d.commitButton,
-		d.commitPushButton,
-		d.pullButton,
-		d.pushButton,
-		widget.NewLabel(""),
-	)
-
-	detailsPanel := container.NewVBox(
-		widget.NewCard("Selected repository", "", detailGrid),
-		widget.NewCard("Actions", "", actionBar),
-	)
-
-	logPanel := widget.NewCard(
-		"Operation log",
-		"",
-		container.NewBorder(
-			nil,
-			container.NewPadded(d.statusLabel),
-			nil,
-			nil,
-			container.NewVScroll(d.logEntry),
-		),
-	)
-
-	rightPanel := container.NewBorder(detailsPanel, nil, nil, nil, logPanel)
-
-	split := container.NewHSplit(leftPanel, rightPanel)
-	split.Offset = 0.52
-
-	return container.NewBorder(
-		container.NewVBox(title),
-		nil,
-		nil,
-		nil,
-		split,
-	)
+func (m dashboardModel) Init() tea.Cmd {
+	cmds := []tea.Cmd{refreshTickCmd(m.autoRefreshInterval())}
+	if m.busy && strings.TrimSpace(m.cfg.RootPath) != "" {
+		cmds = append(cmds, m.spinner.Tick, scanReposCmd(m.cfg.RootPath))
+	}
+	return tea.Batch(cmds...)
 }
 
-func (d *dashboard) chooseFolder() {
-	picker := dialog.NewFolderOpen(func(uri fyne.ListableURI, err error) {
+func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		if m.modal != nil {
+			m.modal.input.Width = m.modalInputWidth()
+		}
+		m.ensureRepoVisible()
+		return m, nil
+
+	case spinner.TickMsg:
+		if !m.busy {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
+
+	case scanFinishedMsg:
+		m.busy = false
+		m.busyLabel = ""
+		if msg.err != nil {
+			m.status = fmt.Sprintf("Scan failed: %v", msg.err)
+			return m, nil
+		}
+
+		m.repos = msg.repos
+		m.cfg.LastScan = time.Now()
+		_ = config.Save(m.cfg)
+		m.applyFilters()
+		m.status = fmt.Sprintf("Loaded %d repositories from %s", len(m.repos), valueOrDash(m.cfg.RootPath))
+		return m, nil
+
+	case operationFinishedMsg:
+		m.busy = false
+		m.busyLabel = ""
+		m.status = msg.status
+		m.appendLogs(msg.logs)
+		if msg.selectedPath != "" {
+			m.selectedPath = msg.selectedPath
+		}
+		if msg.refresh {
+			return m.startRefresh("Refreshing dashboard after git operation...")
+		}
+		return m, nil
+
+	case refreshTickMsg:
+		if m.busy || m.modal != nil || strings.TrimSpace(m.cfg.RootPath) == "" {
+			return m, refreshTickCmd(m.autoRefreshInterval())
+		}
+
+		updated, cmd := m.startRefresh("Auto-refreshing repositories...")
+		return updated, tea.Batch(cmd, refreshTickCmd(updated.autoRefreshInterval()))
+
+	case tea.KeyMsg:
+		if m.modal != nil {
+			return m.updateModal(msg)
+		}
+		return m.updateDashboard(msg)
+	}
+
+	return m, nil
+}
+
+func (m dashboardModel) updateDashboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c", "q":
+		return m, tea.Quit
+	case "tab":
+		m.focus = m.nextFocus()
+		return m, nil
+	case "shift+tab":
+		m.focus = m.previousFocus()
+		return m, nil
+	case "/":
+		m.openModal(modalFilter, "Filter Repositories", "Filter by repo name, branch, path, remote, or commit message.", m.filterQuery, "repo name, branch, path...")
+		return m, nil
+	case "d":
+		if m.busy {
+			return m, nil
+		}
+		m.dirtyOnly = !m.dirtyOnly
+		m.applyFilters()
+		if m.dirtyOnly {
+			m.status = "Dirty-only filter enabled."
+		} else {
+			m.status = "Dirty-only filter disabled."
+		}
+		return m, nil
+	case "r":
+		if m.busy {
+			return m, nil
+		}
+		return m.startRefresh("Refreshing repositories...")
+	case "left", "h":
+		m.moveLeft()
+		return m, nil
+	case "right", "l":
+		m.moveRight()
+		return m, nil
+	case "up", "k":
+		m.moveUp()
+		return m, nil
+	case "down", "j":
+		m.moveDown()
+		return m, nil
+	case "enter":
+		return m.activateFocused()
+	}
+
+	return m, nil
+}
+
+func (m dashboardModel) updateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.modal == nil {
+		return m, nil
+	}
+
+	switch msg.String() {
+	case "esc":
+		m.modal = nil
+		m.status = "Cancelled."
+		return m, nil
+	case "enter":
+		return m.submitModal()
+	}
+
+	var cmd tea.Cmd
+	modal := m.modal
+	modal.input, cmd = modal.input.Update(msg)
+	m.modal = modal
+	return m, cmd
+}
+
+func (m dashboardModel) submitModal() (tea.Model, tea.Cmd) {
+	if m.modal == nil {
+		return m, nil
+	}
+
+	modal := m.modal
+	m.modal = nil
+	value := strings.TrimSpace(modal.input.Value())
+
+	switch modal.kind {
+	case modalFilter:
+		m.filterQuery = value
+		m.applyFilters()
+		if value == "" {
+			m.status = "Filter cleared."
+		} else {
+			m.status = fmt.Sprintf("Filtering repositories by %q", value)
+		}
+		return m, nil
+
+	case modalRoot:
+		root, err := ensureRootPath(value)
 		if err != nil {
-			dialog.ShowError(err, d.win)
-			return
-		}
-		if uri == nil {
-			return
+			m.status = fmt.Sprintf("Unable to use %q: %v", value, err)
+			return m, nil
 		}
 
-		d.cfg.RootPath = filepath.Clean(uri.Path())
-		d.cfg.LastOpened = time.Now()
-		_ = config.Save(d.cfg)
-		d.refresh(true)
-	}, d.win)
+		m.cfg.RootPath = root
+		m.cfg.LastOpened = time.Now()
+		_ = config.Save(m.cfg)
+		return m.startRefresh(fmt.Sprintf("Scanning %s ...", root))
 
-	if d.cfg.RootPath != "" {
-		location, err := storage.ListerForURI(storage.NewFileURI(d.cfg.RootPath))
-		if err == nil {
-			picker.SetLocation(location)
+	case modalCommitOnly:
+		message := value
+		if message == "" {
+			message = modal.placeholder
 		}
+		repo := modal.repo
+		m.busy = true
+		m.busyLabel = fmt.Sprintf("Committing all changes in %s ...", repo.Name)
+		m.status = m.busyLabel
+		return m, tea.Batch(
+			m.spinner.Tick,
+			singleRepoActionCmd("Commit All", repo, func() (string, error) {
+				return gitops.CommitAll(repo.Path, message)
+			}),
+		)
+
+	case modalCommitAndPush:
+		message := value
+		if message == "" {
+			message = modal.placeholder
+		}
+		repo := modal.repo
+		m.busy = true
+		m.busyLabel = fmt.Sprintf("Committing and pushing %s ...", repo.Name)
+		m.status = m.busyLabel
+		return m, tea.Batch(
+			m.spinner.Tick,
+			singleRepoActionCmd("Commit + Push", repo, func() (string, error) {
+				return gitops.CommitAndPush(repo.Path, message)
+			}),
+		)
+
+	case modalBulkCommit:
+		message := value
+		if message == "" {
+			message = modal.placeholder
+		}
+		m.busy = true
+		m.busyLabel = "Committing and pushing every dirty repository..."
+		m.status = m.busyLabel
+		return m, tea.Batch(
+			m.spinner.Tick,
+			bulkCommitPushCmd(m.repos, message),
+		)
+
+	case modalClone:
+		source := value
+		if source == "" {
+			m.status = "Clone source cannot be empty."
+			return m, nil
+		}
+
+		root, err := ensureRootPath(m.cfg.RootPath)
+		if err != nil {
+			m.status = fmt.Sprintf("Unable to prepare clone root: %v", err)
+			return m, nil
+		}
+
+		m.cfg.RootPath = root
+		_ = config.Save(m.cfg)
+		m.busy = true
+		m.busyLabel = fmt.Sprintf("Cloning %s into %s ...", source, root)
+		m.status = m.busyLabel
+		return m, tea.Batch(
+			m.spinner.Tick,
+			cloneRepoCmd(root, source),
+		)
 	}
 
-	picker.Show()
+	return m, nil
 }
 
-func (d *dashboard) promptCloneRepo() {
-	root, err := d.cloneRootPath()
-	if err != nil {
-		dialog.ShowError(err, d.win)
-		return
+func (m dashboardModel) activateFocused() (tea.Model, tea.Cmd) {
+	switch m.focus {
+	case focusGlobalActions:
+		return m.activateGlobalAction()
+	case focusRepoList:
+		if len(m.filtered) == 0 {
+			return m, nil
+		}
+		m.focus = focusRepoActions
+		return m, nil
+	case focusRepoActions:
+		return m.activateRepoAction()
 	}
 
-	if d.cloneWindow != nil {
-		d.cloneWindow.Show()
-		d.cloneWindow.RequestFocus()
-		return
-	}
-
-	browser := newCloneBrowser(d, root)
-	d.cloneWindow = browser.win
-	browser.show()
+	return m, nil
 }
 
-func (d *dashboard) runCloneRepo(source, dirName string) bool {
-	if d.isActing || d.isScanning {
-		return false
+func (m dashboardModel) activateGlobalAction() (tea.Model, tea.Cmd) {
+	if m.busy {
+		return m, nil
 	}
 
-	if strings.TrimSpace(source) == "" {
-		dialog.ShowError(fmt.Errorf("repository URL cannot be empty"), d.win)
-		return false
+	switch globalAction(m.globalActionIdx) {
+	case globalActionChangeRoot:
+		m.openModal(modalRoot, "Change Repository Root", "Type the folder that contains the repositories you want to manage.", m.cfg.RootPath, defaultRootPath())
+		return m, nil
+
+	case globalActionRefresh:
+		return m.startRefresh("Refreshing repositories...")
+
+	case globalActionFilter:
+		m.openModal(modalFilter, "Filter Repositories", "Filter by repo name, branch, path, remote, or commit message.", m.filterQuery, "repo name, branch, path...")
+		return m, nil
+
+	case globalActionDirtyOnly:
+		m.dirtyOnly = !m.dirtyOnly
+		m.applyFilters()
+		if m.dirtyOnly {
+			m.status = "Dirty-only filter enabled."
+		} else {
+			m.status = "Dirty-only filter disabled."
+		}
+		return m, nil
+
+	case globalActionClone:
+		m.openModal(modalClone, "Clone Repository", "Paste a Git URL or use owner/repo shorthand. GUITboard will clone into the current root folder.", "", "owner/repo")
+		return m, nil
+
+	case globalActionFetchAll:
+		if !m.hasSyncableRepos() {
+			m.status = "No repositories with a remote were found."
+			return m, nil
+		}
+		m.busy = true
+		m.busyLabel = "Fetching and fast-forwarding repositories where possible..."
+		m.status = m.busyLabel
+		return m, tea.Batch(m.spinner.Tick, fetchAllCmd(m.repos))
+
+	case globalActionBulkCommit:
+		if !m.hasDirtyRepos() {
+			m.status = "No repositories currently have uncommitted changes."
+			return m, nil
+		}
+		m.openModal(modalBulkCommit, "Commit Dirty Repositories", "Type one commit message. GUITboard will stage, commit, and push every dirty repository.", "", defaultCommitMessage())
+		return m, nil
 	}
 
-	root, err := d.cloneRootPath()
-	if err != nil {
-		dialog.ShowError(err, d.win)
-		return false
-	}
-
-	displayName := strings.TrimSpace(dirName)
-	if displayName == "" {
-		displayName = gitops.DefaultCloneDirName(source)
-	}
-	if displayName == "" {
-		displayName = strings.TrimSpace(source)
-	}
-
-	d.isActing = true
-	d.updateActionState()
-	d.setStatus(fmt.Sprintf("Cloning %s into %s ...", source, root))
-
-	progress := dialog.NewProgressInfinite("Clone repository", fmt.Sprintf("Cloning into %s", root), d.win)
-	progress.Show()
-
-	go func() {
-		targetPath, output, err := gitops.Clone(source, root, dirName)
-		fyne.Do(func() {
-			progress.Hide()
-			d.isActing = false
-			d.updateActionState()
-
-			if targetPath == "" && displayName != "" {
-				targetPath = filepath.Join(root, displayName)
-			}
-
-			repo := gitops.Repo{
-				Name: displayName,
-				Path: targetPath,
-			}
-			if repo.Name == "" && targetPath != "" {
-				repo.Name = filepath.Base(targetPath)
-			}
-			if repo.Name == "" {
-				repo.Name = strings.TrimSpace(source)
-			}
-			if repo.Path == "" {
-				repo.Path = root
-			}
-
-			d.appendLog("Clone", repo, output, err)
-			if err != nil {
-				dialog.ShowError(err, d.win)
-				d.setStatus(fmt.Sprintf("Clone failed for %s", repo.Name))
-			} else {
-				d.selectedPath = targetPath
-				d.setStatus(fmt.Sprintf("Clone finished for %s", repo.Name))
-			}
-
-			d.refresh(false)
-		})
-	}()
-
-	return true
+	return m, nil
 }
 
-func (d *dashboard) refresh(showProgress bool) {
-	if d.isScanning {
-		return
+func (m dashboardModel) activateRepoAction() (tea.Model, tea.Cmd) {
+	if m.busy {
+		return m, nil
 	}
 
-	root := strings.TrimSpace(d.cfg.RootPath)
-	d.rootLabel.SetText(root)
-	if root == "" {
-		d.setStatus("Choose a folder that contains your repositories.")
-		return
+	repo, ok := m.selectedRepo()
+	if !ok {
+		m.status = "Select a repository first."
+		return m, nil
 	}
 
-	if _, err := os.Stat(root); err != nil {
-		d.setStatus(fmt.Sprintf("Root folder is not available: %v", err))
-		return
+	switch repoAction(m.repoActionIdx) {
+	case repoActionStageAll:
+		if !repo.Dirty {
+			m.status = fmt.Sprintf("%s is already clean.", repo.Name)
+			return m, nil
+		}
+		m.busy = true
+		m.busyLabel = fmt.Sprintf("Staging every change in %s ...", repo.Name)
+		m.status = m.busyLabel
+		return m, tea.Batch(
+			m.spinner.Tick,
+			singleRepoActionCmd("Stage All", repo, func() (string, error) {
+				return gitops.StageAll(repo.Path)
+			}),
+		)
+
+	case repoActionCommitPush:
+		if !repo.Dirty {
+			m.status = fmt.Sprintf("%s has no local changes to commit.", repo.Name)
+			return m, nil
+		}
+		m.openModal(modalCommitAndPush, "Quick Commit + Push", fmt.Sprintf("Type a commit message for %s. GUITboard will stage and push the rest for you.", repo.Name), "", defaultCommitMessage())
+		return m, nil
+
+	case repoActionCommitOnly:
+		if !repo.Dirty {
+			m.status = fmt.Sprintf("%s has no local changes to commit.", repo.Name)
+			return m, nil
+		}
+		m.openModal(modalCommitOnly, "Commit All Changes", fmt.Sprintf("Type a commit message for %s. GUITboard will stage everything before committing.", repo.Name), "", defaultCommitMessage())
+		return m, nil
+
+	case repoActionPull:
+		if repo.Upstream == "" || repo.UpstreamGone {
+			m.status = fmt.Sprintf("%s does not have a usable upstream branch.", repo.Name)
+			return m, nil
+		}
+		m.busy = true
+		m.busyLabel = fmt.Sprintf("Pulling %s ...", repo.Name)
+		m.status = m.busyLabel
+		return m, tea.Batch(
+			m.spinner.Tick,
+			singleRepoActionCmd("Pull", repo, func() (string, error) {
+				return gitops.Pull(repo.Path)
+			}),
+		)
+
+	case repoActionPush:
+		if repo.Remote == "" {
+			m.status = fmt.Sprintf("%s does not have a remote configured.", repo.Name)
+			return m, nil
+		}
+		m.busy = true
+		m.busyLabel = fmt.Sprintf("Pushing %s ...", repo.Name)
+		m.status = m.busyLabel
+		return m, tea.Batch(
+			m.spinner.Tick,
+			singleRepoActionCmd("Push", repo, func() (string, error) {
+				return gitops.Push(repo.Path)
+			}),
+		)
 	}
 
-	d.isScanning = true
-	d.updateActionState()
-	d.setStatus(fmt.Sprintf("Scanning %s ...", root))
-
-	progress := dialog.NewProgressInfinite("Scanning repositories", "Reading repositories and git status...", d.win)
-	if showProgress {
-		progress.Show()
-	}
-
-	go func() {
-		repos, err := gitops.Scan(root)
-		fyne.Do(func() {
-			if showProgress {
-				progress.Hide()
-			}
-			d.isScanning = false
-			d.updateActionState()
-			if err != nil {
-				d.setStatus(fmt.Sprintf("Scan failed: %v", err))
-				dialog.ShowError(err, d.win)
-				return
-			}
-
-			d.repos = repos
-			d.cfg.LastScan = time.Now()
-			_ = config.Save(d.cfg)
-			d.applyFilters()
-			d.setStatus(fmt.Sprintf("Loaded %d repositories from %s", len(repos), root))
-		})
-	}()
+	return m, nil
 }
 
-func (d *dashboard) applyFilters() {
-	query := strings.TrimSpace(strings.ToLower(d.searchEntry.Text))
-	changedOnly := d.changedOnly.Checked
+func (m dashboardModel) startRefresh(status string) (dashboardModel, tea.Cmd) {
+	if strings.TrimSpace(m.cfg.RootPath) == "" {
+		m.status = "Set a repository root before refreshing."
+		return m, nil
+	}
 
-	d.filtered = d.filtered[:0]
-	for _, repo := range d.repos {
-		if changedOnly && !repo.Dirty {
+	m.busy = true
+	m.busyLabel = status
+	m.status = status
+	return m, tea.Batch(m.spinner.Tick, scanReposCmd(m.cfg.RootPath))
+}
+
+func (m *dashboardModel) openModal(kind modalKind, title, prompt, value, placeholder string) {
+	input := textinput.New()
+	input.Prompt = "> "
+	input.SetValue(value)
+	input.Placeholder = placeholder
+	input.CharLimit = 240
+	input.Width = m.modalInputWidth()
+	input.Focus()
+
+	m.modal = &modalState{
+		kind:        kind,
+		title:       title,
+		prompt:      prompt,
+		placeholder: placeholder,
+		input:       input,
+	}
+}
+
+func (m dashboardModel) modalInputWidth() int {
+	return maxInt(12, minInt(56, m.width-14))
+}
+
+func (m *dashboardModel) applyFilters() {
+	query := strings.TrimSpace(strings.ToLower(m.filterQuery))
+
+	filtered := make([]gitops.Repo, 0, len(m.repos))
+	for _, repo := range m.repos {
+		if m.dirtyOnly && !repo.Dirty {
 			continue
 		}
 		if query != "" {
@@ -534,22 +607,808 @@ func (d *dashboard) applyFilters() {
 				continue
 			}
 		}
-		d.filtered = append(d.filtered, repo)
+		filtered = append(filtered, repo)
 	}
 
-	d.updateSummary()
-	d.list.Refresh()
-	d.restoreSelection()
-	d.refreshDetails()
+	m.filtered = filtered
+	m.restoreSelection()
+	m.ensureRepoVisible()
 }
 
-func (d *dashboard) updateSummary() {
-	total := len(d.repos)
+func (m *dashboardModel) restoreSelection() {
+	if len(m.filtered) == 0 {
+		m.selectedIdx = -1
+		m.selectedPath = ""
+		m.repoScroll = 0
+		if m.focus == focusRepoActions {
+			m.focus = focusRepoList
+		}
+		return
+	}
+
+	if m.selectedPath != "" {
+		for idx, repo := range m.filtered {
+			if repo.Path == m.selectedPath {
+				m.selectedIdx = idx
+				return
+			}
+		}
+	}
+
+	m.selectedIdx = 0
+	m.selectedPath = m.filtered[0].Path
+}
+
+func (m *dashboardModel) moveLeft() {
+	switch m.focus {
+	case focusGlobalActions:
+		if m.globalActionIdx > 0 {
+			m.globalActionIdx--
+		}
+	case focusRepoList:
+		m.focus = focusGlobalActions
+	case focusRepoActions:
+		if m.repoActionIdx > 0 {
+			m.repoActionIdx--
+		}
+	}
+}
+
+func (m *dashboardModel) moveRight() {
+	switch m.focus {
+	case focusGlobalActions:
+		if m.globalActionIdx < len(m.globalActionButtons())-1 {
+			m.globalActionIdx++
+		}
+	case focusRepoList:
+		if len(m.filtered) > 0 {
+			m.focus = focusRepoActions
+		}
+	case focusRepoActions:
+		if m.repoActionIdx < len(m.repoActionButtons())-1 {
+			m.repoActionIdx++
+		}
+	}
+}
+
+func (m *dashboardModel) moveUp() {
+	switch m.focus {
+	case focusGlobalActions:
+		return
+	case focusRepoList:
+		if m.selectedIdx > 0 {
+			m.selectedIdx--
+			m.selectedPath = m.filtered[m.selectedIdx].Path
+			m.ensureRepoVisible()
+		}
+	case focusRepoActions:
+		m.focus = focusRepoList
+	}
+}
+
+func (m *dashboardModel) moveDown() {
+	switch m.focus {
+	case focusGlobalActions:
+		if len(m.filtered) > 0 {
+			m.focus = focusRepoList
+		}
+	case focusRepoList:
+		if m.selectedIdx >= 0 && m.selectedIdx < len(m.filtered)-1 {
+			m.selectedIdx++
+			m.selectedPath = m.filtered[m.selectedIdx].Path
+			m.ensureRepoVisible()
+		}
+	case focusRepoActions:
+		return
+	}
+}
+
+func (m dashboardModel) nextFocus() focusArea {
+	switch m.focus {
+	case focusGlobalActions:
+		return focusRepoList
+	case focusRepoList:
+		if len(m.filtered) > 0 {
+			return focusRepoActions
+		}
+		return focusGlobalActions
+	default:
+		return focusGlobalActions
+	}
+}
+
+func (m dashboardModel) previousFocus() focusArea {
+	switch m.focus {
+	case focusRepoActions:
+		return focusRepoList
+	case focusRepoList:
+		return focusGlobalActions
+	default:
+		if len(m.filtered) > 0 {
+			return focusRepoActions
+		}
+		return focusRepoList
+	}
+}
+
+func (m *dashboardModel) ensureRepoVisible() {
+	if m.selectedIdx < 0 {
+		m.repoScroll = 0
+		return
+	}
+
+	visible := m.visibleRepoCount()
+	if visible <= 0 {
+		return
+	}
+
+	if m.selectedIdx < m.repoScroll {
+		m.repoScroll = m.selectedIdx
+	}
+	if m.selectedIdx >= m.repoScroll+visible {
+		m.repoScroll = m.selectedIdx - visible + 1
+	}
+	if m.repoScroll < 0 {
+		m.repoScroll = 0
+	}
+}
+
+func (m dashboardModel) selectedRepo() (gitops.Repo, bool) {
+	if m.selectedIdx >= 0 && m.selectedIdx < len(m.filtered) {
+		repo := m.filtered[m.selectedIdx]
+		m.selectedPath = repo.Path
+		return repo, true
+	}
+
+	if m.selectedPath == "" {
+		return gitops.Repo{}, false
+	}
+
+	for _, repo := range m.repos {
+		if repo.Path == m.selectedPath {
+			return repo, true
+		}
+	}
+
+	return gitops.Repo{}, false
+}
+
+func (m *dashboardModel) appendLogs(blocks []string) {
+	if len(blocks) == 0 {
+		return
+	}
+
+	m.logs = append(blocks, m.logs...)
+	if len(m.logs) > 80 {
+		m.logs = m.logs[:80]
+	}
+}
+
+func (m dashboardModel) autoRefreshInterval() time.Duration {
+	seconds := m.cfg.AutoRefreshSeconds
+	if seconds < 10 {
+		seconds = 30
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func refreshTickCmd(interval time.Duration) tea.Cmd {
+	return tea.Tick(interval, func(t time.Time) tea.Msg {
+		return refreshTickMsg(t)
+	})
+}
+
+func scanReposCmd(root string) tea.Cmd {
+	root = strings.TrimSpace(root)
+	return func() tea.Msg {
+		repos, err := gitops.Scan(root)
+		return scanFinishedMsg{repos: repos, err: err}
+	}
+}
+
+func singleRepoActionCmd(title string, repo gitops.Repo, action func() (string, error)) tea.Cmd {
+	return func() tea.Msg {
+		output, err := action()
+		status := fmt.Sprintf("%s finished for %s", title, repo.Name)
+		if err != nil {
+			status = fmt.Sprintf("%s failed for %s", title, repo.Name)
+		}
+		return operationFinishedMsg{
+			status:       status,
+			logs:         []string{formatLogBlock(title, repo, output, err)},
+			refresh:      true,
+			selectedPath: repo.Path,
+		}
+	}
+}
+
+func fetchAllCmd(repos []gitops.Repo) tea.Cmd {
+	snapshot := append([]gitops.Repo(nil), repos...)
+	return func() tea.Msg {
+		logs := make([]string, 0, len(snapshot))
+		processed := 0
+		failures := 0
+
+		for _, repo := range snapshot {
+			if strings.TrimSpace(repo.Remote) == "" {
+				continue
+			}
+			processed++
+			output, err := gitops.Sync(repo)
+			logs = append(logs, formatLogBlock("Fetch All", repo, output, err))
+			if err != nil {
+				failures++
+			}
+		}
+
+		switch {
+		case processed == 0:
+			return operationFinishedMsg{status: "No repositories with a remote were found."}
+		case failures > 0:
+			return operationFinishedMsg{
+				status:  fmt.Sprintf("Fetch all completed with %d failures.", failures),
+				logs:    logs,
+				refresh: true,
+			}
+		default:
+			return operationFinishedMsg{
+				status:  fmt.Sprintf("Fetch all completed across %d repositories.", processed),
+				logs:    logs,
+				refresh: true,
+			}
+		}
+	}
+}
+
+func bulkCommitPushCmd(repos []gitops.Repo, message string) tea.Cmd {
+	snapshot := append([]gitops.Repo(nil), repos...)
+	return func() tea.Msg {
+		logs := make([]string, 0, len(snapshot))
+		processed := 0
+		failures := 0
+
+		for _, repo := range snapshot {
+			if !repo.Dirty {
+				continue
+			}
+			processed++
+			output, err := gitops.CommitAndPush(repo.Path, message)
+			logs = append(logs, formatLogBlock("Commit + Push", repo, output, err))
+			if err != nil {
+				failures++
+			}
+		}
+
+		switch {
+		case processed == 0:
+			return operationFinishedMsg{status: "No repositories currently have local changes."}
+		case failures > 0:
+			return operationFinishedMsg{
+				status:  fmt.Sprintf("Commit + push finished with %d failures.", failures),
+				logs:    logs,
+				refresh: true,
+			}
+		default:
+			return operationFinishedMsg{
+				status:  fmt.Sprintf("Commit + push finished across %d repositories.", processed),
+				logs:    logs,
+				refresh: true,
+			}
+		}
+	}
+}
+
+func cloneRepoCmd(root, source string) tea.Cmd {
+	root = strings.TrimSpace(root)
+	source = strings.TrimSpace(source)
+
+	return func() tea.Msg {
+		targetPath, output, err := gitops.Clone(source, root, "")
+
+		repoName := gitops.DefaultCloneDirName(source)
+		if repoName == "" && targetPath != "" {
+			repoName = filepath.Base(targetPath)
+		}
+		if repoName == "" {
+			repoName = source
+		}
+
+		repo := gitops.Repo{
+			Name: repoName,
+			Path: targetPath,
+		}
+
+		status := fmt.Sprintf("Clone finished for %s", repoName)
+		if err != nil {
+			status = fmt.Sprintf("Clone failed for %s", repoName)
+		}
+
+		return operationFinishedMsg{
+			status:       status,
+			logs:         []string{formatLogBlock("Clone", repo, output, err)},
+			refresh:      true,
+			selectedPath: targetPath,
+		}
+	}
+}
+
+func (m dashboardModel) View() string {
+	if m.modal != nil {
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.renderModal())
+	}
+
+	if m.isCompactLayout() {
+		return m.renderCompactView()
+	}
+
+	return m.renderFullView()
+}
+
+func (m dashboardModel) renderFullView() string {
+	header := m.renderHeader()
+	actions := renderPanel("Dashboard Actions", m.renderGlobalActionRows(m.width), m.width)
+	stats := m.renderSummaryRow()
+
+	layout := m.layout()
+	leftPanel := renderPanel("Repositories", m.renderRepoList(layout.leftWidth), layout.leftWidth)
+	rightBody := lipgloss.JoinVertical(
+		lipgloss.Left,
+		renderPanel("Selected Repository", m.renderSelectedRepo(layout.rightWidth), layout.rightWidth),
+		renderPanel("Repo Actions", m.renderRepoActionRows(layout.rightWidth), layout.rightWidth),
+		renderPanel("Operation Log", m.renderLogBlocks(layout.logLines), layout.rightWidth),
+	)
+	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, " ", rightBody)
+
+	footer := styles.help.Render("Arrows move the dashboard. Enter runs the highlighted action. / filters, d toggles dirty-only, r refreshes, q quits.")
+
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		header,
+		actions,
+		stats,
+		body,
+		footer,
+	)
+}
+
+func (m dashboardModel) renderCompactView() string {
+	width := maxInt(20, m.width)
+
+	topLines := []string{
+		m.renderCompactTitleLine(width),
+		m.renderCompactContextLine(width),
+	}
+
+	actionLines := splitNonEmptyLines(m.renderWrappedActions(m.globalActionButtons(), m.globalActionIdx, m.focus == focusGlobalActions, width))
+	topLines = append(topLines, actionLines...)
+
+	total, dirty, ahead, behind := m.summaryCounts()
+	summaryLine := fmt.Sprintf("Repos %d | Dirty %d | Ahead %d | Behind %d", total, dirty, ahead, behind)
+	topLines = append(topLines, styles.mutedText.Render(truncateText(summaryLine, width)))
+	topLines = append(topLines, strings.Repeat("─", width))
+
+	maxBottom := maxInt(0, m.height-len(topLines)-3)
+	bottomLines := m.renderCompactBottom(maxBottom, width)
+	repoLines := maxInt(3, m.height-len(topLines)-len(bottomLines))
+	repoSection := m.renderCompactRepoSection(width, repoLines)
+
+	lines := append([]string{}, topLines...)
+	lines = append(lines, repoSection...)
+	lines = append(lines, bottomLines...)
+
+	if len(lines) > m.height {
+		lines = lines[:m.height]
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func (m dashboardModel) renderCompactTitleLine(width int) string {
+	status := m.status
+	if m.busy {
+		status = fmt.Sprintf("%s %s", m.spinner.View(), m.busyLabel)
+	}
+
+	line := fmt.Sprintf("GUITboard | %s", status)
+	return styles.title.Render(truncateText(line, width))
+}
+
+func (m dashboardModel) renderCompactContextLine(width int) string {
+	context := fmt.Sprintf(
+		"Root %s | Filter %s | %s",
+		valueOrDash(m.cfg.RootPath),
+		valueOrDefault(m.filterQuery, "all"),
+		dirtyModeLabel(m.dirtyOnly),
+	)
+	return styles.headerText.Render(truncateText(context, width))
+}
+
+func (m dashboardModel) renderCompactRepoSection(width, maxLines int) []string {
+	lines := []string{
+		styles.mutedText.Render(
+			truncateText(
+				fmt.Sprintf("%d shown of %d total repositories", len(m.filtered), len(m.repos)),
+				width,
+			),
+		),
+	}
+
+	if maxLines <= 1 {
+		return lines[:minInt(len(lines), maxLines)]
+	}
+
+	if len(m.filtered) == 0 {
+		lines = append(lines, styles.emptyState.Render(truncateText("No repositories match the current root and filter settings.", width)))
+		return lines[:minInt(len(lines), maxLines)]
+	}
+
+	rows := maxLines - len(lines)
+	if rows <= 0 {
+		return lines[:minInt(len(lines), maxLines)]
+	}
+
+	start := minInt(m.repoScroll, maxInt(0, len(m.filtered)-rows))
+	end := minInt(len(m.filtered), start+rows)
+
+	for idx := start; idx < end; idx++ {
+		showMore := idx == end-1 && end < len(m.filtered) && rows > 1
+		if showMore {
+			lines = append(lines, styles.mutedText.Render(truncateText(fmt.Sprintf("... %d more repositories", len(m.filtered)-end+1), width)))
+			break
+		}
+
+		repo := m.filtered[idx]
+		lines = append(lines, m.renderCompactRepoRow(repo, idx == m.selectedIdx, width))
+	}
+
+	if len(lines) > maxLines {
+		lines = lines[:maxLines]
+	}
+
+	return lines
+}
+
+func (m dashboardModel) renderCompactRepoRow(repo gitops.Repo, selected bool, width int) string {
+	statusToken := "clean"
+	if repo.Dirty {
+		statusToken = fmt.Sprintf("%dchg", repo.ChangedCount)
+	}
+	aheadBehind := ""
+	if repo.Ahead > 0 || repo.Behind > 0 {
+		aheadBehind = fmt.Sprintf(" ↑%d ↓%d", repo.Ahead, repo.Behind)
+	}
+
+	line := fmt.Sprintf("%s %s  %s  %s%s", selectionMarker(selected), repo.Name, compactBranch(repo.Branch), statusToken, aheadBehind)
+	line = truncateText(line, width)
+
+	switch {
+	case selected && m.focus == focusRepoList:
+		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#102A43", Dark: "#E6EEF7"}).Background(lipgloss.AdaptiveColor{Light: "#DCEEF8", Dark: "#143042"}).Width(width).Render(line)
+	case selected:
+		return lipgloss.NewStyle().Bold(true).Width(width).Render(line)
+	default:
+		return styles.detailValue.Width(width).Render(line)
+	}
+}
+
+func (m dashboardModel) renderCompactBottom(maxLines, width int) []string {
+	if maxLines <= 0 {
+		return nil
+	}
+
+	var lines []string
+	repo, ok := m.selectedRepo()
+	if ok {
+		lines = append(lines, strings.Repeat("─", width))
+		lines = append(lines, truncateText(fmt.Sprintf("Selected %s | %s | %s", repo.Name, compactBranch(repo.Branch), compactChangeStatus(repo)), width))
+
+		if maxLines-len(lines) > 0 {
+			lines = append(lines, truncateText("Path "+repo.Path, width))
+		}
+		if maxLines-len(lines) > 0 && width >= 48 {
+			lines = append(lines, truncateText("Last "+lastCommitSummary(repo), width))
+		}
+	}
+
+	if remaining := maxLines - len(lines); remaining > 0 {
+		actionLines := splitNonEmptyLines(m.renderWrappedActions(m.repoActionButtons(), m.repoActionIdx, m.focus == focusRepoActions, width))
+		if len(actionLines) > remaining {
+			actionLines = actionLines[:remaining]
+		}
+		lines = append(lines, actionLines...)
+	}
+
+	if remaining := maxLines - len(lines); remaining > 0 {
+		lines = append(lines, truncateText("Log "+m.compactLogPreview(), width))
+	}
+
+	if remaining := maxLines - len(lines); remaining > 0 && m.height >= 16 {
+		lines = append(lines, styles.help.Render(truncateText("Arrows move. Enter runs. / filter. d dirty. r refresh. q quit.", width)))
+	}
+
+	if len(lines) > maxLines {
+		lines = lines[:maxLines]
+	}
+
+	return lines
+}
+
+func (m dashboardModel) compactLogPreview() string {
+	if len(m.logs) == 0 {
+		return "No git operations yet."
+	}
+
+	first := strings.Split(m.logs[0], "\n")
+	if len(first) == 0 {
+		return "No git operations yet."
+	}
+
+	return first[0]
+}
+
+func (m dashboardModel) isCompactLayout() bool {
+	return m.width < 96 || m.height < 28
+}
+
+type dashboardLayout struct {
+	leftWidth  int
+	rightWidth int
+	logLines   int
+}
+
+func (m dashboardModel) layout() dashboardLayout {
+	leftWidth := maxInt(38, minInt(52, m.width*42/100))
+	rightWidth := maxInt(42, m.width-leftWidth-1)
+	logLines := maxInt(8, m.height-26)
+
+	return dashboardLayout{
+		leftWidth:  leftWidth,
+		rightWidth: rightWidth,
+		logLines:   logLines,
+	}
+}
+
+func (m dashboardModel) renderHeader() string {
+	status := m.status
+	if m.busy {
+		status = fmt.Sprintf("%s %s", m.spinner.View(), m.busyLabel)
+	}
+
+	line1 := lipgloss.JoinHorizontal(
+		lipgloss.Center,
+		styles.title.Render("GUITboard"),
+		styles.headerDivider.Render("terminal dashboard"),
+	)
+
+	context := fmt.Sprintf(
+		"Root: %s  |  Filter: %s  |  Mode: %s  |  Status: %s",
+		valueOrDash(m.cfg.RootPath),
+		valueOrDefault(m.filterQuery, "all repositories"),
+		dirtyModeLabel(m.dirtyOnly),
+		status,
+	)
+
+	return renderPanel("", line1+"\n"+styles.headerText.Render(truncateText(context, m.width-8)), m.width)
+}
+
+func (m dashboardModel) renderSummaryRow() string {
+	total, dirty, ahead, behind := m.summaryCounts()
+	cardWidth := maxInt(18, (m.width-3)/4)
+
+	cards := []string{
+		renderStatCard("Repositories", fmt.Sprintf("%d", total), cardWidth),
+		renderStatCard("Dirty", fmt.Sprintf("%d", dirty), cardWidth),
+		renderStatCard("Ahead", fmt.Sprintf("%d", ahead), cardWidth),
+		renderStatCard("Behind", fmt.Sprintf("%d", behind), cardWidth),
+	}
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, cards...)
+}
+
+func (m dashboardModel) renderGlobalActionRows(width int) string {
+	buttons := m.globalActionButtons()
+	maxWidth := maxInt(24, width-styles.panel.GetHorizontalFrameSize())
+	return m.renderWrappedActions(buttons, m.globalActionIdx, m.focus == focusGlobalActions, maxWidth)
+}
+
+func (m dashboardModel) renderRepoActionRows(width int) string {
+	buttons := m.repoActionButtons()
+	maxWidth := maxInt(24, width-styles.panel.GetHorizontalFrameSize())
+	return m.renderWrappedActions(buttons, m.repoActionIdx, m.focus == focusRepoActions, maxWidth)
+}
+
+func (m dashboardModel) renderWrappedActions(buttons []actionButton, selectedIndex int, focused bool, maxWidth int) string {
+	lines := make([]string, 0, 2)
+	currentLine := ""
+
+	for idx, button := range buttons {
+		rendered := renderActionButton(button, idx == selectedIndex && focused, focused)
+		candidate := rendered
+		if currentLine != "" {
+			candidate = currentLine + " " + rendered
+		}
+
+		if currentLine != "" && lipgloss.Width(candidate) > maxWidth {
+			lines = append(lines, currentLine)
+			currentLine = rendered
+			continue
+		}
+
+		currentLine = candidate
+	}
+
+	if currentLine != "" {
+		lines = append(lines, currentLine)
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func (m dashboardModel) renderRepoList(width int) string {
+	innerWidth := width - styles.panel.GetHorizontalFrameSize()
+	if innerWidth < 20 {
+		innerWidth = 20
+	}
+
+	info := fmt.Sprintf(
+		"%d shown of %d total repositories",
+		len(m.filtered),
+		len(m.repos),
+	)
+	if m.dirtyOnly {
+		info += " | dirty only"
+	}
+	if m.filterQuery != "" {
+		info += " | filter active"
+	}
+
+	lines := []string{styles.sectionInfo.Render(info)}
+	if len(m.filtered) == 0 {
+		lines = append(lines, styles.emptyState.Render("No repositories match the current root and filter settings."))
+		return strings.Join(lines, "\n\n")
+	}
+
+	visible := m.visibleRepoCount()
+	start := minInt(m.repoScroll, maxInt(0, len(m.filtered)-visible))
+	end := minInt(len(m.filtered), start+visible)
+
+	for idx := start; idx < end; idx++ {
+		repo := m.filtered[idx]
+		selected := idx == m.selectedIdx
+		lines = append(lines, m.renderRepoRow(repo, selected, innerWidth))
+	}
+
+	if end < len(m.filtered) {
+		lines = append(lines, styles.sectionInfo.Render(fmt.Sprintf("More repositories below: %d", len(m.filtered)-end)))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func (m dashboardModel) renderRepoRow(repo gitops.Repo, selected bool, width int) string {
+	chips := []string{
+		renderBadge(branchBadgeLabel(repo), styles.badgeMuted),
+	}
+	if repo.Dirty {
+		chips = append(chips, renderBadge(fmt.Sprintf("%d changed", repo.ChangedCount), styles.badgeDirty))
+	} else {
+		chips = append(chips, renderBadge("clean", styles.badgeClean))
+	}
+	if repo.Ahead > 0 {
+		chips = append(chips, renderBadge(fmt.Sprintf("ahead %d", repo.Ahead), styles.badgeAhead))
+	}
+	if repo.Behind > 0 {
+		chips = append(chips, renderBadge(fmt.Sprintf("behind %d", repo.Behind), styles.badgeBehind))
+	}
+
+	nameLine := truncateText(repo.Name, maxInt(16, width-2))
+	metaLine := truncateText(strings.Join([]string{repo.Path, formatTime(repo.LastActivity)}, "  |  "), maxInt(16, width-2))
+	content := lipgloss.JoinVertical(
+		lipgloss.Left,
+		nameLine+"  "+strings.Join(chips, " "),
+		styles.mutedText.Render(metaLine),
+	)
+
+	if selected {
+		return styles.repoSelected.Width(width).Render(content)
+	}
+	return styles.repoRow.Width(width).Render(content)
+}
+
+func (m dashboardModel) renderSelectedRepo(width int) string {
+	repo, ok := m.selectedRepo()
+	if !ok {
+		return styles.emptyState.Render("Select a repository from the list to inspect it and run actions.")
+	}
+
+	lines := []string{
+		styles.repoTitle.Render(repo.Name),
+		renderDetailLine("Path", repo.Path, width),
+		renderDetailLine("Branch", branchSummary(repo), width),
+		renderDetailLine("Remote", valueOrDash(repo.Remote), width),
+		renderDetailLine("Last Commit", lastCommitSummary(repo), width),
+		renderDetailLine("Activity", formatTime(repo.LastActivity), width),
+		renderDetailLine("Status", statusSummary(repo), width),
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func (m dashboardModel) renderLogBlocks(maxLines int) string {
+	if len(m.logs) == 0 {
+		return styles.emptyState.Render("No git operations have been run yet.")
+	}
+
+	var blocks []string
+	linesLeft := maxLines
+
+	for _, block := range m.logs {
+		blockLines := strings.Split(block, "\n")
+		if len(blockLines) > linesLeft {
+			if linesLeft <= 0 {
+				break
+			}
+			blocks = append(blocks, strings.Join(blockLines[:linesLeft], "\n"))
+			linesLeft = 0
+			break
+		}
+
+		blocks = append(blocks, block)
+		linesLeft -= len(blockLines)
+		if linesLeft <= 1 {
+			break
+		}
+		linesLeft--
+	}
+
+	return strings.Join(blocks, "\n\n")
+}
+
+func (m dashboardModel) renderModal() string {
+	if m.modal == nil {
+		return ""
+	}
+
+	body := lipgloss.JoinVertical(
+		lipgloss.Left,
+		styles.modalTitle.Render(m.modal.title),
+		styles.modalText.Render(m.modal.prompt),
+		styles.modalInput.Render(m.modal.input.View()),
+		styles.help.Render("Enter submits. Esc closes the popup."),
+	)
+
+	return styles.modalBox.Width(minInt(84, maxInt(20, m.width-4))).Render(body)
+}
+
+func (m dashboardModel) globalActionButtons() []actionButton {
+	return []actionButton{
+		{label: "Root", enabled: !m.busy},
+		{label: "Refresh", enabled: !m.busy},
+		{label: "Filter", enabled: !m.busy},
+		{label: fmt.Sprintf("Dirty: %s", onOffLabel(m.dirtyOnly)), enabled: !m.busy},
+		{label: "Clone", enabled: !m.busy},
+		{label: "Fetch All", enabled: !m.busy && m.hasSyncableRepos()},
+		{label: "Commit Dirty", enabled: !m.busy && m.hasDirtyRepos()},
+	}
+}
+
+func (m dashboardModel) repoActionButtons() []actionButton {
+	repo, selected := m.selectedRepo()
+	return []actionButton{
+		{label: "Stage", enabled: selected && !m.busy && repo.Dirty},
+		{label: "Commit+Push", enabled: selected && !m.busy && repo.Dirty},
+		{label: "Commit", enabled: selected && !m.busy && repo.Dirty},
+		{label: "Pull", enabled: selected && !m.busy && repo.Upstream != "" && !repo.UpstreamGone},
+		{label: "Push", enabled: selected && !m.busy && repo.Remote != ""},
+	}
+}
+
+func (m dashboardModel) summaryCounts() (int, int, int, int) {
 	dirty := 0
 	ahead := 0
 	behind := 0
 
-	for _, repo := range d.repos {
+	for _, repo := range m.repos {
 		if repo.Dirty {
 			dirty++
 		}
@@ -561,348 +1420,163 @@ func (d *dashboard) updateSummary() {
 		}
 	}
 
-	d.totalValue.SetText(fmt.Sprintf("%d", total))
-	d.dirtyValue.SetText(fmt.Sprintf("%d", dirty))
-	d.aheadValue.SetText(fmt.Sprintf("%d", ahead))
-	d.behindValue.SetText(fmt.Sprintf("%d", behind))
+	return len(m.repos), dirty, ahead, behind
 }
 
-func (d *dashboard) restoreSelection() {
-	if d.selectedPath == "" && len(d.filtered) > 0 {
-		d.selectedPath = d.filtered[0].Path
-		d.list.Select(0)
-		return
-	}
-
-	if d.selectedPath == "" {
-		d.list.UnselectAll()
-		return
-	}
-
-	for idx, repo := range d.filtered {
-		if repo.Path == d.selectedPath {
-			d.list.Select(idx)
-			return
-		}
-	}
-
-	if len(d.filtered) == 0 {
-		d.selectedPath = ""
-		d.list.UnselectAll()
-		return
-	}
-
-	d.selectedPath = d.filtered[0].Path
-	d.list.Select(0)
-}
-
-func (d *dashboard) refreshDetails() {
-	repo, ok := d.selectedRepo()
-	if !ok {
-		d.detailName.SetText("No repository selected")
-		d.detailPath.SetText("-")
-		d.detailBranch.SetText("-")
-		d.detailRemote.SetText("-")
-		d.detailCommit.SetText("-")
-		d.detailActivity.SetText("-")
-		d.detailStatus.SetText("-")
-		d.updateActionState()
-		return
-	}
-
-	d.detailName.SetText(repo.Name)
-	d.detailPath.SetText(repo.Path)
-	d.detailBranch.SetText(branchSummary(repo))
-	d.detailRemote.SetText(valueOrDash(repo.Remote))
-	d.detailCommit.SetText(lastCommitSummary(repo))
-	d.detailActivity.SetText(formatTime(repo.LastActivity))
-	d.detailStatus.SetText(statusSummary(repo))
-	d.updateActionState()
-}
-
-func (d *dashboard) selectedRepo() (gitops.Repo, bool) {
-	for _, repo := range d.repos {
-		if repo.Path == d.selectedPath {
-			return repo, true
-		}
-	}
-	return gitops.Repo{}, false
-}
-
-func (d *dashboard) runRepoAction(repo gitops.Repo, title string, action func() (string, error)) {
-	if d.isActing || d.isScanning {
-		return
-	}
-
-	d.isActing = true
-	d.updateActionState()
-	d.setStatus(fmt.Sprintf("%s on %s ...", title, repo.Name))
-
-	progress := dialog.NewProgressInfinite(title, fmt.Sprintf("Running git action in %s", repo.Path), d.win)
-	progress.Show()
-
-	go func() {
-		output, err := action()
-		fyne.Do(func() {
-			progress.Hide()
-			d.isActing = false
-			d.updateActionState()
-
-			d.appendLog(title, repo, output, err)
-			if err != nil {
-				dialog.ShowError(err, d.win)
-				d.setStatus(fmt.Sprintf("%s failed for %s", title, repo.Name))
-			} else {
-				d.setStatus(fmt.Sprintf("%s finished for %s", title, repo.Name))
-			}
-
-			d.refresh(false)
-		})
-	}()
-}
-
-func (d *dashboard) promptCommitMessage(title, repoName string, onSubmit func(message string)) {
-	entry := widget.NewEntry()
-	entry.SetPlaceHolder("Dashboard sync " + time.Now().Format("2006-01-02 15:04"))
-
-	dialog.ShowForm(
-		title,
-		"Run",
-		"Cancel",
-		[]*widget.FormItem{
-			widget.NewFormItem("Repository", widget.NewLabel(repoName)),
-			widget.NewFormItem("Commit message", entry),
-		},
-		func(confirm bool) {
-			if !confirm {
-				return
-			}
-
-			message := strings.TrimSpace(entry.Text)
-			if message == "" {
-				message = entry.PlaceHolder
-			}
-			onSubmit(message)
-		},
-		d.win,
-	)
-}
-
-func (d *dashboard) promptBulkCommit() {
-	changed := 0
-	for _, repo := range d.repos {
+func (m dashboardModel) hasDirtyRepos() bool {
+	for _, repo := range m.repos {
 		if repo.Dirty {
-			changed++
+			return true
 		}
 	}
-	if changed == 0 {
-		dialog.ShowInformation("Nothing to upload", "No repositories currently have uncommitted changes.", d.win)
-		return
+	return false
+}
+
+func (m dashboardModel) hasSyncableRepos() bool {
+	for _, repo := range m.repos {
+		if strings.TrimSpace(repo.Remote) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (m dashboardModel) visibleRepoCount() int {
+	if m.isCompactLayout() {
+		reserved := 10
+		if m.height < 20 {
+			reserved = 8
+		}
+		return maxInt(3, m.height-reserved)
 	}
 
-	entry := widget.NewEntry()
-	entry.SetPlaceHolder("Dashboard sync " + time.Now().Format("2006-01-02 15:04"))
+	return maxInt(5, (m.height-17)/3)
+}
 
-	dialog.ShowForm(
-		"Commit and push changed repositories",
-		"Run",
-		"Cancel",
-		[]*widget.FormItem{
-			widget.NewFormItem("Repositories", widget.NewLabel(fmt.Sprintf("%d changed repositories", changed))),
-			widget.NewFormItem("Commit message", entry),
-		},
-		func(confirm bool) {
-			if !confirm {
-				return
-			}
+func renderPanel(title, body string, width int) string {
+	panelWidth := maxInt(24, width)
+	innerWidth := panelWidth - styles.panel.GetHorizontalFrameSize()
+	if innerWidth < 10 {
+		innerWidth = 10
+	}
 
-			message := strings.TrimSpace(entry.Text)
-			if message == "" {
-				message = entry.PlaceHolder
-			}
-			d.runBulkCommitPush(message)
-		},
-		d.win,
+	lines := make([]string, 0, 2)
+	if strings.TrimSpace(title) != "" {
+		lines = append(lines, styles.panelTitle.Width(innerWidth).Render(title))
+	}
+	lines = append(lines, lipgloss.NewStyle().Width(innerWidth).Render(body))
+
+	return styles.panel.Width(panelWidth).Render(strings.Join(lines, "\n"))
+}
+
+func renderStatCard(label, value string, width int) string {
+	body := lipgloss.JoinVertical(
+		lipgloss.Left,
+		styles.statLabel.Render(label),
+		styles.statValue.Render(value),
 	)
+	return styles.statCard.Width(width).Render(body)
 }
 
-func (d *dashboard) runBulkCommitPush(message string) {
-	if d.isActing || d.isScanning {
-		return
+func renderActionButton(button actionButton, selected bool, focused bool) string {
+	switch {
+	case !button.enabled:
+		return styles.actionDisabled.Render(button.label)
+	case selected && focused:
+		return styles.actionActive.Render(button.label)
+	case selected:
+		return styles.actionSelected.Render(button.label)
+	default:
+		return styles.actionButton.Render(button.label)
+	}
+}
+
+func renderBadge(label string, style lipgloss.Style) string {
+	return style.Render(label)
+}
+
+func renderDetailLine(label, value string, width int) string {
+	maxWidth := maxInt(16, width-styles.panel.GetHorizontalFrameSize()-15)
+	return styles.detailLabel.Render(label+":") + " " + styles.detailValue.Render(truncateText(value, maxWidth))
+}
+
+func splitNonEmptyLines(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
 	}
 
-	d.isActing = true
-	d.updateActionState()
-	d.setStatus("Committing and pushing all changed repositories ...")
-
-	progress := dialog.NewProgressInfinite("Bulk upload", "Staging, committing, and pushing every changed repository...", d.win)
-	progress.Show()
-
-	go func() {
-		var lines []string
-		failures := 0
-
-		for _, repo := range d.repos {
-			if !repo.Dirty {
-				continue
-			}
-			output, err := gitops.CommitAndPush(repo.Path, message)
-			lines = append(lines, formatLogBlock("Commit + Push", repo, output, err))
-			if err != nil {
-				failures++
-			}
+	lines := strings.Split(value, "\n")
+	filtered := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
 		}
-
-		fyne.Do(func() {
-			progress.Hide()
-			d.isActing = false
-			d.updateActionState()
-
-			if len(lines) > 0 {
-				d.logEntry.SetText(strings.Join(lines, "\n\n") + "\n")
-			}
-
-			if failures > 0 {
-				d.setStatus(fmt.Sprintf("Bulk upload completed with %d failures", failures))
-				dialog.ShowInformation("Bulk upload finished", fmt.Sprintf("Completed with %d failures. Review the log for details.", failures), d.win)
-			} else {
-				d.setStatus("Bulk upload completed successfully")
-			}
-
-			d.refresh(false)
-		})
-	}()
-}
-
-func (d *dashboard) confirmPullAll() {
-	eligible := 0
-	for _, repo := range d.repos {
-		if repo.Upstream != "" && !repo.UpstreamGone {
-			eligible++
-		}
-	}
-	if eligible == 0 {
-		dialog.ShowInformation("Nothing to pull", "No repositories with a configured upstream were found.", d.win)
-		return
+		filtered = append(filtered, line)
 	}
 
-	dialog.ShowConfirm(
-		"Pull all repositories",
-		fmt.Sprintf("Run git pull --ff-only on %d repositories with an upstream?", eligible),
-		func(confirm bool) {
-			if confirm {
-				d.runPullAll()
-			}
-		},
-		d.win,
-	)
+	return filtered
 }
 
-func (d *dashboard) runPullAll() {
-	if d.isActing || d.isScanning {
-		return
+func selectionMarker(selected bool) string {
+	if selected {
+		return ">"
+	}
+	return " "
+}
+
+func compactBranch(branch string) string {
+	trimmed := strings.TrimSpace(branch)
+	if trimmed == "" {
+		return "-"
+	}
+	return trimmed
+}
+
+func compactRepoStatus(repo gitops.Repo) string {
+	parts := []string{compactBranch(repo.Branch)}
+	if repo.Dirty {
+		parts = append(parts, fmt.Sprintf("%d changed", repo.ChangedCount))
+	} else {
+		parts = append(parts, "clean")
+	}
+	if repo.Ahead > 0 || repo.Behind > 0 {
+		parts = append(parts, fmt.Sprintf("↑%d ↓%d", repo.Ahead, repo.Behind))
+	}
+	return strings.Join(parts, " | ")
+}
+
+func compactChangeStatus(repo gitops.Repo) string {
+	parts := []string{}
+	if repo.Dirty {
+		parts = append(parts, fmt.Sprintf("%d changed", repo.ChangedCount))
+	} else {
+		parts = append(parts, "clean")
+	}
+	if repo.Ahead > 0 || repo.Behind > 0 {
+		parts = append(parts, fmt.Sprintf("↑%d ↓%d", repo.Ahead, repo.Behind))
+	}
+	return strings.Join(parts, " | ")
+}
+
+func defaultCommitMessage() string {
+	return "Dashboard sync " + time.Now().Format("2006-01-02 15:04")
+}
+
+func ensureRootPath(raw string) (string, error) {
+	root := strings.TrimSpace(raw)
+	if root == "" {
+		root = defaultRootPath()
+	}
+	if root == "" {
+		return "", fmt.Errorf("unable to determine a repository root")
 	}
 
-	d.isActing = true
-	d.updateActionState()
-	d.setStatus("Pulling all repositories with an upstream ...")
-
-	progress := dialog.NewProgressInfinite("Pull all repositories", "Running git pull --ff-only where possible...", d.win)
-	progress.Show()
-
-	go func() {
-		var lines []string
-		failures := 0
-
-		for _, repo := range d.repos {
-			if repo.Upstream == "" || repo.UpstreamGone {
-				continue
-			}
-			output, err := gitops.Pull(repo.Path)
-			lines = append(lines, formatLogBlock("Pull", repo, output, err))
-			if err != nil {
-				failures++
-			}
-		}
-
-		fyne.Do(func() {
-			progress.Hide()
-			d.isActing = false
-			d.updateActionState()
-
-			if len(lines) > 0 {
-				d.logEntry.SetText(strings.Join(lines, "\n\n") + "\n")
-			}
-
-			if failures > 0 {
-				d.setStatus(fmt.Sprintf("Pull completed with %d failures", failures))
-			} else {
-				d.setStatus("Pull completed successfully")
-			}
-
-			d.refresh(false)
-		})
-	}()
-}
-
-func (d *dashboard) appendLog(title string, repo gitops.Repo, output string, err error) {
-	block := formatLogBlock(title, repo, output, err)
-	current := strings.TrimSpace(d.logEntry.Text)
-	if current == "" {
-		d.logEntry.SetText(block + "\n")
-		return
-	}
-	d.logEntry.SetText(block + "\n\n" + current + "\n")
-}
-
-func (d *dashboard) updateActionState() {
-	repo, repoSelected := d.selectedRepo()
-	busy := d.isScanning || d.isActing
-
-	hasDirtyRepos := false
-	hasPullableRepos := false
-	for _, item := range d.repos {
-		if item.Dirty {
-			hasDirtyRepos = true
-		}
-		if item.Upstream != "" && !item.UpstreamGone {
-			hasPullableRepos = true
-		}
+	root = filepath.Clean(root)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return "", err
 	}
 
-	setEnabled(d.stageButton, repoSelected && repo.Dirty && !busy)
-	setEnabled(d.commitButton, repoSelected && repo.Dirty && !busy)
-	setEnabled(d.commitPushButton, repoSelected && repo.Dirty && !busy)
-	setEnabled(d.pullButton, repoSelected && repo.Upstream != "" && !repo.UpstreamGone && !busy)
-	setEnabled(d.pushButton, repoSelected && repo.Remote != "" && !busy)
-	setEnabled(d.refreshButton, !busy)
-	setEnabled(d.cloneButton, !busy)
-	setEnabled(d.bulkCommitButton, hasDirtyRepos && !busy)
-	setEnabled(d.pullAllButton, hasPullableRepos && !busy)
-}
-
-func (d *dashboard) startAutoRefresh() {
-	interval := time.Duration(d.cfg.AutoRefreshSeconds) * time.Second
-	if interval < 10*time.Second {
-		interval = 30 * time.Second
-	}
-
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for range ticker.C {
-			fyne.Do(func() {
-				if !d.isScanning && !d.isActing {
-					d.refresh(false)
-				}
-			})
-		}
-	}()
-}
-
-func (d *dashboard) setStatus(text string) {
-	d.rootLabel.SetText(valueOrDash(d.cfg.RootPath))
-	d.statusLabel.SetText(text)
+	return root, nil
 }
 
 func defaultRootPath() string {
@@ -925,29 +1599,6 @@ func defaultRootPath() string {
 	return candidates[0]
 }
 
-func (d *dashboard) cloneRootPath() (string, error) {
-	root := strings.TrimSpace(d.cfg.RootPath)
-	if root == "" {
-		root = defaultRootPath()
-	}
-	if root == "" {
-		return "", fmt.Errorf("unable to determine a repository root folder")
-	}
-
-	root = filepath.Clean(root)
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return "", err
-	}
-
-	if d.cfg.RootPath != root {
-		d.cfg.RootPath = root
-		_ = config.Save(d.cfg)
-	}
-	d.rootLabel.SetText(root)
-
-	return root, nil
-}
-
 func rootPathCandidates(home string) []string {
 	if runtime.GOOS == "windows" {
 		return []string{
@@ -965,27 +1616,12 @@ func rootPathCandidates(home string) []string {
 	}
 }
 
-func metadataRow(label string, value fyne.CanvasObject) fyne.CanvasObject {
-	title := widget.NewLabelWithStyle(label, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	title.Resize(fyne.NewSize(140, title.MinSize().Height))
-	return container.NewBorder(nil, nil, title, nil, value)
-}
-
-func repoListSummary(repo gitops.Repo) string {
-	parts := []string{branchSummary(repo)}
-	if repo.Dirty {
-		parts = append(parts, fmt.Sprintf("%d changed", repo.ChangedCount))
-	} else {
-		parts = append(parts, "clean")
+func branchBadgeLabel(repo gitops.Repo) string {
+	branch := strings.TrimSpace(repo.Branch)
+	if branch == "" {
+		return "(unknown)"
 	}
-	if repo.Ahead > 0 {
-		parts = append(parts, fmt.Sprintf("ahead %d", repo.Ahead))
-	}
-	if repo.Behind > 0 {
-		parts = append(parts, fmt.Sprintf("behind %d", repo.Behind))
-	}
-	parts = append(parts, "activity "+formatTime(repo.LastActivity))
-	return strings.Join(parts, " | ")
+	return branch
 }
 
 func branchSummary(repo gitops.Repo) string {
@@ -1044,6 +1680,13 @@ func valueOrDash(value string) string {
 	return value
 }
 
+func valueOrDefault(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
+}
+
 func formatTime(value time.Time) string {
 	if value.IsZero() {
 		return "-"
@@ -1053,10 +1696,12 @@ func formatTime(value time.Time) string {
 
 func formatLogBlock(title string, repo gitops.Repo, output string, err error) string {
 	lines := []string{
-		fmt.Sprintf("[%s] %s", title, repo.Name),
-		repo.Path,
+		fmt.Sprintf("[%s] %s  %s", time.Now().Format("2006-01-02 15:04:05"), title, valueOrDash(repo.Name)),
 	}
 
+	if repo.Path != "" {
+		lines = append(lines, repo.Path)
+	}
 	if output != "" {
 		lines = append(lines, output)
 	}
@@ -1069,13 +1714,45 @@ func formatLogBlock(title string, repo gitops.Repo, output string, err error) st
 	return strings.Join(lines, "\n")
 }
 
-func setEnabled(button *widget.Button, enabled bool) {
-	if button == nil {
-		return
-	}
+func dirtyModeLabel(enabled bool) string {
 	if enabled {
-		button.Enable()
-		return
+		return "dirty only"
 	}
-	button.Disable()
+	return "all repos"
+}
+
+func onOffLabel(enabled bool) string {
+	if enabled {
+		return "On"
+	}
+	return "Off"
+}
+
+func truncateText(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+
+	runes := []rune(value)
+	if len(runes) <= width {
+		return value
+	}
+	if width <= 1 {
+		return string(runes[:width])
+	}
+	return string(runes[:width-1]) + "…"
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
