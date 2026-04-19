@@ -253,6 +253,9 @@ func (m dashboardModel) updateDashboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c", "q":
 		return m, tea.Quit
+	case "esc":
+		m.stepBackFocus()
+		return m, nil
 	case "tab":
 		m.focus = m.nextFocus()
 		return m, nil
@@ -260,7 +263,7 @@ func (m dashboardModel) updateDashboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.focus = m.previousFocus()
 		return m, nil
 	case "/":
-		m.openModal(modalFilter, "Filter Repositories", "Filter by repo name, branch, path, remote, or commit message.", m.filterQuery, "repo name, branch, path...")
+		m.openModal(modalFilter, "Filter Repositories", "Filter by repo name, branch, path, remote, or commit message.", m.filterQuery, "repo name, branch, path...", gitops.Repo{})
 		return m, nil
 	case "d":
 		if m.busy {
@@ -451,14 +454,14 @@ func (m dashboardModel) activateGlobalAction() (tea.Model, tea.Cmd) {
 
 	switch globalAction(m.globalActionIdx) {
 	case globalActionChangeRoot:
-		m.openModal(modalRoot, "Change Repository Root", "Type the folder that contains the repositories you want to manage.", m.cfg.RootPath, defaultRootPath())
+		m.openModal(modalRoot, "Change Repository Root", "Type the folder that contains the repositories you want to manage.", m.cfg.RootPath, defaultRootPath(), gitops.Repo{})
 		return m, nil
 
 	case globalActionRefresh:
 		return m.startRefresh("Refreshing repositories...")
 
 	case globalActionFilter:
-		m.openModal(modalFilter, "Filter Repositories", "Filter by repo name, branch, path, remote, or commit message.", m.filterQuery, "repo name, branch, path...")
+		m.openModal(modalFilter, "Filter Repositories", "Filter by repo name, branch, path, remote, or commit message.", m.filterQuery, "repo name, branch, path...", gitops.Repo{})
 		return m, nil
 
 	case globalActionDirtyOnly:
@@ -472,7 +475,7 @@ func (m dashboardModel) activateGlobalAction() (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case globalActionClone:
-		m.openModal(modalClone, "Clone Repository", "Paste a Git URL or use owner/repo shorthand. GUITboard will clone into the current root folder.", "", "owner/repo")
+		m.openModal(modalClone, "Clone Repository", "Paste a Git URL or use owner/repo shorthand. GUITboard will clone into the current root folder.", "", "owner/repo", gitops.Repo{})
 		return m, nil
 
 	case globalActionFetchAll:
@@ -490,7 +493,7 @@ func (m dashboardModel) activateGlobalAction() (tea.Model, tea.Cmd) {
 			m.status = "No repositories currently have uncommitted changes."
 			return m, nil
 		}
-		m.openModal(modalBulkCommit, "Commit Dirty Repositories", "Type one commit message. GUITboard will stage, commit, and push every dirty repository.", "", defaultCommitMessage())
+		m.openModal(modalBulkCommit, "Commit Dirty Repositories", "Type one commit message. GUITboard will stage, commit, and push every dirty repository.", "", defaultCommitMessage(), gitops.Repo{})
 		return m, nil
 	}
 
@@ -531,7 +534,7 @@ func (m dashboardModel) activateRepoAction() (tea.Model, tea.Cmd) {
 			m.status = fmt.Sprintf("%s has no local changes to commit.", repo.Name)
 			return m, nil
 		}
-		m.openModal(modalCommitAndPush, "Quick Commit + Push", fmt.Sprintf("Type a commit message for %s. GUITboard will stage and push the rest for you.", repo.Name), "", defaultCommitMessage())
+		m.openModal(modalCommitAndPush, "Quick Commit + Push", fmt.Sprintf("Type a commit message for %s. GUITboard will stage and push the rest for you.", repo.Name), "", defaultCommitMessage(), repo)
 		return m, nil
 
 	case repoActionCommitOnly:
@@ -539,7 +542,7 @@ func (m dashboardModel) activateRepoAction() (tea.Model, tea.Cmd) {
 			m.status = fmt.Sprintf("%s has no local changes to commit.", repo.Name)
 			return m, nil
 		}
-		m.openModal(modalCommitOnly, "Commit All Changes", fmt.Sprintf("Type a commit message for %s. GUITboard will stage everything before committing.", repo.Name), "", defaultCommitMessage())
+		m.openModal(modalCommitOnly, "Commit All Changes", fmt.Sprintf("Type a commit message for %s. GUITboard will stage everything before committing.", repo.Name), "", defaultCommitMessage(), repo)
 		return m, nil
 
 	case repoActionPull:
@@ -592,7 +595,7 @@ func (m dashboardModel) startRefresh(status string) (dashboardModel, tea.Cmd) {
 	return m, tea.Batch(m.spinner.Tick, scanReposCmd(m.cfg.RootPath))
 }
 
-func (m *dashboardModel) openModal(kind modalKind, title, prompt, value, placeholder string) {
+func (m *dashboardModel) openModal(kind modalKind, title, prompt, value, placeholder string, repo gitops.Repo) {
 	input := textinput.New()
 	input.Prompt = "> "
 	input.SetValue(value)
@@ -606,6 +609,7 @@ func (m *dashboardModel) openModal(kind modalKind, title, prompt, value, placeho
 		title:       title,
 		prompt:      prompt,
 		placeholder: placeholder,
+		repo:        repo,
 		input:       input,
 	}
 }
@@ -677,6 +681,8 @@ func (m *dashboardModel) moveLeft() {
 	case focusRepoActions:
 		if m.repoActionIdx > 0 {
 			m.repoActionIdx--
+		} else {
+			m.focus = focusRepoList
 		}
 	}
 }
@@ -686,6 +692,8 @@ func (m *dashboardModel) moveRight() {
 	case focusGlobalActions:
 		if m.globalActionIdx < len(m.globalActionButtons())-1 {
 			m.globalActionIdx++
+		} else if len(m.filtered) > 0 {
+			m.focus = focusRepoList
 		}
 	case focusRepoList:
 		if len(m.filtered) > 0 {
@@ -707,6 +715,8 @@ func (m *dashboardModel) moveUp() {
 			m.selectedIdx--
 			m.selectedPath = m.filtered[m.selectedIdx].Path
 			m.ensureRepoVisible()
+		} else {
+			m.focus = focusGlobalActions
 		}
 	case focusRepoActions:
 		m.focus = focusRepoList
@@ -726,7 +736,16 @@ func (m *dashboardModel) moveDown() {
 			m.ensureRepoVisible()
 		}
 	case focusRepoActions:
-		return
+		m.focus = focusRepoList
+	}
+}
+
+func (m *dashboardModel) stepBackFocus() {
+	switch m.focus {
+	case focusRepoActions:
+		m.focus = focusRepoList
+	case focusRepoList:
+		m.focus = focusGlobalActions
 	}
 }
 
@@ -1010,7 +1029,7 @@ func (m dashboardModel) renderFullView() string {
 	)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, " ", rightBody)
 
-	footer := styles.help.Render("Arrows move the dashboard. Enter runs the highlighted action. / filters, d toggles dirty-only, r refreshes, q quits.")
+	footer := styles.help.Render("Arrows move the dashboard. Enter runs the highlighted action. Esc backs out. / filters, d toggles dirty-only, r refreshes, q quits.")
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -1184,7 +1203,7 @@ func (m dashboardModel) renderCompactBottom(maxLines, width int) []string {
 	}
 
 	if remaining := maxLines - len(lines); remaining > 0 && m.height >= 16 {
-		lines = append(lines, styles.help.Render(truncateText("Arrows move. Enter runs. / filter. d dirty. r refresh. q quit.", width)))
+		lines = append(lines, styles.help.Render(truncateText("Arrows move. Enter runs. Esc backs out. / filter. d dirty. r refresh. q quit.", width)))
 	}
 
 	if len(lines) > maxLines {
