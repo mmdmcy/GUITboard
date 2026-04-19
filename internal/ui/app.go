@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type focusArea int
@@ -135,7 +136,10 @@ func Run() error {
 
 func newDashboardModel(cfg config.Config) dashboardModel {
 	spin := spinner.New()
-	spin.Spinner = spinner.MiniDot
+	spin.Spinner = spinner.Spinner{
+		Frames: []string{"/", "|", "\\", "-"},
+		FPS:    time.Second / 9,
+	}
 	spin.Style = styles.spinner
 
 	model := dashboardModel{
@@ -933,15 +937,18 @@ func cloneRepoCmd(root, source string) tea.Cmd {
 }
 
 func (m dashboardModel) View() string {
-	if m.modal != nil {
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.renderModal())
-	}
-
+	base := ""
 	if m.isCompactLayout() {
-		return m.renderCompactView()
+		base = m.renderCompactView()
+	} else {
+		base = m.renderFullView()
 	}
 
-	return m.renderFullView()
+	if m.modal != nil {
+		return overlayCentered(base, m.renderModal(), m.width, m.height)
+	}
+
+	return base
 }
 
 func (m dashboardModel) renderFullView() string {
@@ -1377,7 +1384,12 @@ func (m dashboardModel) renderModal() string {
 		styles.help.Render("Enter submits. Esc closes the popup."),
 	)
 
-	return styles.modalBox.Width(minInt(84, maxInt(20, m.width-4))).Render(body)
+	availableWidth := m.width - 4
+	if m.isCompactLayout() {
+		availableWidth = m.width - 10
+	}
+
+	return styles.modalBox.Width(minInt(84, maxInt(20, availableWidth))).Render(body)
 }
 
 func (m dashboardModel) globalActionButtons() []actionButton {
@@ -1498,6 +1510,74 @@ func renderBadge(label string, style lipgloss.Style) string {
 func renderDetailLine(label, value string, width int) string {
 	maxWidth := maxInt(16, width-styles.panel.GetHorizontalFrameSize()-15)
 	return styles.detailLabel.Render(label+":") + " " + styles.detailValue.Render(truncateText(value, maxWidth))
+}
+
+func overlayCentered(base, overlay string, width, height int) string {
+	width = maxInt(1, width)
+	height = maxInt(1, height)
+
+	baseLines := normalizeViewportLines(base, width, height)
+	overlayLines := strings.Split(overlay, "\n")
+	overlayWidth := lipgloss.Width(overlay)
+	overlayHeight := len(overlayLines)
+
+	if overlayWidth <= 0 || overlayHeight <= 0 {
+		return strings.Join(baseLines, "\n")
+	}
+
+	x := 0
+	y := 0
+	if width > overlayWidth {
+		x = (width - overlayWidth) / 2
+	}
+	if height > overlayHeight {
+		y = (height - overlayHeight) / 2
+	}
+
+	for idx, overlayLine := range overlayLines {
+		target := y + idx
+		if target < 0 || target >= len(baseLines) {
+			continue
+		}
+
+		line := baseLines[target]
+		left := ansi.Cut(line, 0, x)
+		rightStart := minInt(width, x+overlayWidth)
+		right := ansi.Cut(line, rightStart, width)
+		baseLines[target] = left + overlayLine + right
+	}
+
+	return strings.Join(baseLines, "\n")
+}
+
+func normalizeViewportLines(view string, width, height int) []string {
+	width = maxInt(1, width)
+	height = maxInt(1, height)
+
+	source := strings.Split(view, "\n")
+	lines := make([]string, 0, height)
+
+	for idx := 0; idx < len(source) && idx < height; idx++ {
+		lines = append(lines, fitANSIWidth(source[idx], width))
+	}
+
+	for len(lines) < height {
+		lines = append(lines, strings.Repeat(" ", width))
+	}
+
+	return lines
+}
+
+func fitANSIWidth(value string, width int) string {
+	current := ansi.StringWidth(value)
+	switch {
+	case current == width:
+		return value
+	case current > width:
+		return ansi.Cut(value, 0, width)
+	default:
+		return value + strings.Repeat(" ", width-current)
+	}
 }
 
 func splitNonEmptyLines(value string) []string {
