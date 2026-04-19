@@ -1,8 +1,11 @@
 package gitops
 
 import (
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -109,6 +112,119 @@ func TestCloneRejectsNestedFolderName(t *testing.T) {
 
 	if _, _, err := Clone(remotePath, root, "../bad"); err == nil {
 		t.Fatal("expected Clone to reject a nested folder name")
+	}
+}
+
+func TestListCloneableRepositoriesParsesAndSortsRepos(t *testing.T) {
+	original := ghCommandRunner
+	t.Cleanup(func() {
+		ghCommandRunner = original
+	})
+
+	ghCommandRunner = func(args ...string) (string, error) {
+		if got := strings.Join(args, " "); !strings.Contains(got, "user/repos?affiliation=owner,collaborator,organization_member") {
+			t.Fatalf("unexpected gh arguments: %v", args)
+		}
+
+		return `[
+			[
+				{
+					"name": "beta",
+					"full_name": "rei/beta",
+					"description": "Second repo",
+					"visibility": "private",
+					"default_branch": "main",
+					"clone_url": "https://github.com/rei/beta.git",
+					"ssh_url": "git@github.com:rei/beta.git",
+					"html_url": "https://github.com/rei/beta",
+					"private": true,
+					"fork": false,
+					"archived": false,
+					"updated_at": "2026-04-17T10:30:00Z",
+					"owner": {"login": "rei"}
+				},
+				{
+					"name": "alpha",
+					"full_name": "rei/alpha",
+					"description": "First repo",
+					"visibility": "public",
+					"default_branch": "main",
+					"clone_url": "https://github.com/rei/alpha.git",
+					"ssh_url": "git@github.com:rei/alpha.git",
+					"html_url": "https://github.com/rei/alpha",
+					"private": false,
+					"fork": true,
+					"archived": false,
+					"updated_at": "2026-04-18T13:00:00Z",
+					"owner": {"login": "rei"}
+				}
+			],
+			[
+				{
+					"name": "skipme",
+					"full_name": "",
+					"clone_url": "",
+					"ssh_url": "",
+					"updated_at": "2026-04-19T09:15:00Z",
+					"owner": {"login": "rei"}
+				}
+			]
+		]`, nil
+	}
+
+	repos, err := ListCloneableRepositories()
+	if err != nil {
+		t.Fatalf("ListCloneableRepositories returned error: %v", err)
+	}
+	if len(repos) != 2 {
+		t.Fatalf("expected 2 repositories, got %d", len(repos))
+	}
+	if repos[0].FullName != "rei/alpha" {
+		t.Fatalf("expected most recently updated repo first, got %s", repos[0].FullName)
+	}
+	if got := repos[0].CloneURL(CloneProtocolSSH); got != "git@github.com:rei/alpha.git" {
+		t.Fatalf("expected SSH clone url, got %q", got)
+	}
+	if got := repos[1].Visibility; got != "private" {
+		t.Fatalf("expected visibility to be preserved, got %q", got)
+	}
+}
+
+func TestListCloneableRepositoriesExplainsMissingGitHubCLI(t *testing.T) {
+	original := ghCommandRunner
+	t.Cleanup(func() {
+		ghCommandRunner = original
+	})
+
+	ghCommandRunner = func(args ...string) (string, error) {
+		return "", &exec.Error{Name: "gh", Err: exec.ErrNotFound}
+	}
+
+	_, err := ListCloneableRepositories()
+	if err == nil {
+		t.Fatal("expected ListCloneableRepositories to fail when gh is missing")
+	}
+	if !strings.Contains(err.Error(), "gh auth login") {
+		t.Fatalf("expected helpful gh guidance, got %v", err)
+	}
+}
+
+func TestListCloneableRepositoriesExplainsAuthenticationFailures(t *testing.T) {
+	original := ghCommandRunner
+	t.Cleanup(func() {
+		ghCommandRunner = original
+	})
+
+	ghCommandRunner = func(args ...string) (string, error) {
+		return "", errors.New("gh: HTTP 401: Requires authentication")
+	}
+
+	_, err := ListCloneableRepositories()
+	if err == nil {
+		t.Fatal("expected ListCloneableRepositories to fail when gh auth is missing")
+	}
+	if !strings.Contains(err.Error(), "gh auth login") {
+		t.Fatalf("expected authentication guidance, got %v", err)
 	}
 }
 

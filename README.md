@@ -7,7 +7,8 @@ GUITboard is a local-only desktop dashboard for managing many Git repositories f
 - Scans a chosen root folder for nested Git repositories.
 - Sorts repositories by most recent activity so the busiest projects stay at the top.
 - Shows branch, upstream, ahead/behind, dirty state, and last commit details.
-- Clones GitHub repositories directly into the configured root folder.
+- Browses the GitHub repositories available to your account before cloning, with search, SSH/HTTPS selection, and local duplicate hints.
+- Still supports pasting a custom Git URL when you want to clone something not listed in the browser.
 - Lets you `Stage All`, `Commit All`, `Pull`, `Push`, or `Commit + Push` from the GUI.
 - Supports bulk pull across all tracked repositories.
 - Supports bulk commit-and-push across every changed repository.
@@ -18,6 +19,7 @@ GUITboard is a local-only desktop dashboard for managing many Git repositories f
 
 - Windows 11 or Windows 10, or Linux Mint
 - [Git](https://git-scm.com/)
+- [GitHub CLI](https://cli.github.com/) with `gh auth login` if you want the clone browser to list your GitHub repositories automatically
 - Go 1.25+ if you want to run or build from source
 
 ### Linux Mint development prerequisites
@@ -67,8 +69,9 @@ Then launch the binary for your platform:
 
 1. Start the app.
 2. Confirm the default root folder or click `Choose Folder`.
-3. Optional: click `Clone GitHub Repo...` and paste either `owner/repo` or a full Git URL.
-4. Select a repository in the list and use the action buttons on the right.
+3. Optional: click `Browse + Clone...` to load the repositories your GitHub account can clone, then select one from the list.
+4. If `gh` is not installed or logged in, paste a full Git URL in the clone browser instead.
+5. Select a repository in the dashboard list and use the action buttons on the right.
 
 The app remembers the last folder you picked in your user config directory, so it works on any machine without hardcoded personal paths.
 

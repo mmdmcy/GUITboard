@@ -22,8 +22,9 @@ import (
 )
 
 type dashboard struct {
-	app fyne.App
-	win fyne.Window
+	app         fyne.App
+	win         fyne.Window
+	cloneWindow fyne.Window
 
 	cfg          config.Config
 	repos        []gitops.Repo
@@ -250,7 +251,7 @@ func (d *dashboard) buildUI() {
 		d.refresh(true)
 	})
 
-	d.cloneButton = widget.NewButtonWithIcon("Clone GitHub Repo...", theme.DownloadIcon(), d.promptCloneRepo)
+	d.cloneButton = widget.NewButtonWithIcon("Browse + Clone...", theme.DownloadIcon(), d.promptCloneRepo)
 
 	d.bulkCommitButton = widget.NewButton("Commit + Push Changed Repos...", func() {
 		d.promptBulkCommit()
@@ -380,48 +381,31 @@ func (d *dashboard) promptCloneRepo() {
 		return
 	}
 
-	sourceEntry := widget.NewEntry()
-	sourceEntry.SetPlaceHolder("owner/repo or https://github.com/owner/repo.git")
+	if d.cloneWindow != nil {
+		d.cloneWindow.Show()
+		d.cloneWindow.RequestFocus()
+		return
+	}
 
-	folderEntry := widget.NewEntry()
-	folderEntry.SetPlaceHolder("Optional. Defaults to the repository name")
-
-	destinationLabel := widget.NewLabel(root)
-	destinationLabel.Wrapping = fyne.TextWrapWord
-
-	dialog.ShowForm(
-		"Clone GitHub repository",
-		"Clone",
-		"Cancel",
-		[]*widget.FormItem{
-			widget.NewFormItem("Destination", destinationLabel),
-			widget.NewFormItem("Repository", sourceEntry),
-			widget.NewFormItem("Folder name", folderEntry),
-		},
-		func(confirm bool) {
-			if !confirm {
-				return
-			}
-			d.runCloneRepo(sourceEntry.Text, folderEntry.Text)
-		},
-		d.win,
-	)
+	browser := newCloneBrowser(d, root)
+	d.cloneWindow = browser.win
+	browser.show()
 }
 
-func (d *dashboard) runCloneRepo(source, dirName string) {
+func (d *dashboard) runCloneRepo(source, dirName string) bool {
 	if d.isActing || d.isScanning {
-		return
+		return false
 	}
 
 	if strings.TrimSpace(source) == "" {
 		dialog.ShowError(fmt.Errorf("repository URL cannot be empty"), d.win)
-		return
+		return false
 	}
 
 	root, err := d.cloneRootPath()
 	if err != nil {
 		dialog.ShowError(err, d.win)
-		return
+		return false
 	}
 
 	displayName := strings.TrimSpace(dirName)
@@ -476,6 +460,8 @@ func (d *dashboard) runCloneRepo(source, dirName string) {
 			d.refresh(false)
 		})
 	}()
+
+	return true
 }
 
 func (d *dashboard) refresh(showProgress bool) {

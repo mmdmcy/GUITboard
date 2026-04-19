@@ -16,7 +16,10 @@ import (
 	"time"
 )
 
-const gitTimeout = 25 * time.Second
+const (
+	gitTimeout = 25 * time.Second
+	ghTimeout  = 60 * time.Second
+)
 
 type Repo struct {
 	Name              string
@@ -256,21 +259,29 @@ func RunGit(repoPath string, args ...string) (string, error) {
 }
 
 func runGitCommand(repoPath string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
-	defer cancel()
-
 	cmdArgs := args
 	if strings.TrimSpace(repoPath) != "" {
 		cmdArgs = append([]string{"-C", repoPath}, args...)
 	}
 
-	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	return runCLICommand("git", gitTimeout, []string{"GIT_TERMINAL_PROMPT=0"}, cmdArgs...)
+}
+
+func runCLICommand(name string, timeout time.Duration, env []string, args ...string) (string, error) {
+	ctx := context.Background()
+	cancel := func() {}
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(context.Background(), timeout)
+	}
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = append(os.Environ(), env...)
 
 	output, err := cmd.CombinedOutput()
 	trimmed := trimOutput(string(output))
 	if ctx.Err() == context.DeadlineExceeded {
-		return trimmed, fmt.Errorf("git command timed out")
+		return trimmed, fmt.Errorf("%s command timed out", name)
 	}
 	if err != nil {
 		if trimmed != "" {
