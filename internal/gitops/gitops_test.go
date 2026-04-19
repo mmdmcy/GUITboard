@@ -62,6 +62,26 @@ func TestScanSortsByLatestDirtyActivity(t *testing.T) {
 	}
 }
 
+func TestInspectTracksChangedFiles(t *testing.T) {
+	repoPath := createTestRepo(t, "changed-files")
+	writeFile(t, filepath.Join(repoPath, "first.txt"), "first")
+	writeFile(t, filepath.Join(repoPath, "second.txt"), "second")
+
+	repo := Inspect(repoPath)
+	if !repo.Dirty {
+		t.Fatal("expected repo to be dirty")
+	}
+	if len(repo.ChangedFiles) != 2 {
+		t.Fatalf("expected 2 changed files, got %d", len(repo.ChangedFiles))
+	}
+	if repo.ChangedFiles[0] != "first.txt" && repo.ChangedFiles[1] != "first.txt" {
+		t.Fatalf("expected changed files to include first.txt, got %v", repo.ChangedFiles)
+	}
+	if repo.ChangedFiles[0] != "second.txt" && repo.ChangedFiles[1] != "second.txt" {
+		t.Fatalf("expected changed files to include second.txt, got %v", repo.ChangedFiles)
+	}
+}
+
 func TestCloneClonesRepositoryIntoConfiguredRoot(t *testing.T) {
 	remotePath := createBareRemoteRepo(t)
 	root := t.TempDir()

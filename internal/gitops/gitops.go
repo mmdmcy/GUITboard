@@ -30,6 +30,7 @@ type Repo struct {
 	LastCommitMessage string
 	LastCommitTime    time.Time
 	LastActivity      time.Time
+	ChangedFiles      []string
 	Ahead             int
 	Behind            int
 	ChangedCount      int
@@ -163,6 +164,7 @@ func Inspect(repoPath string) Repo {
 	}
 
 	changedPaths := parseStatus(&repo, statusOutput)
+	repo.ChangedFiles = append(repo.ChangedFiles[:0], changedPaths...)
 
 	if commitOutput, err := RunGit(repoPath, "log", "-1", "--format=%ct%n%s"); err == nil {
 		lines := strings.SplitN(strings.TrimSpace(commitOutput), "\n", 2)

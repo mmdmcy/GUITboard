@@ -27,6 +27,7 @@ type uiStyles struct {
 	badgeClean     lipgloss.Style
 	badgeAhead     lipgloss.Style
 	badgeBehind    lipgloss.Style
+	badgeBusy      lipgloss.Style
 	badgeMuted     lipgloss.Style
 	modalBox       lipgloss.Style
 	modalTitle     lipgloss.Style
@@ -149,6 +150,10 @@ func newUIStyles() uiStyles {
 		badgeBehind: lipgloss.NewStyle().
 			Foreground(warnText).
 			Background(warnSoft).
+			Padding(0, 1),
+		badgeBusy: lipgloss.NewStyle().
+			Foreground(accentStrong).
+			Background(accent).
 			Padding(0, 1),
 		badgeMuted: lipgloss.NewStyle().
 			Foreground(textColor).

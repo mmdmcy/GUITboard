@@ -85,17 +85,20 @@ type dashboardModel struct {
 	filterQuery string
 	dirtyOnly   bool
 
-	focus           focusArea
-	globalActionIdx int
-	repoActionIdx   int
-	modal           *modalState
-	logs            []string
-	status          string
-	busy            bool
-	busyLabel       string
-	spinner         spinner.Model
-	width           int
-	height          int
+	focus             focusArea
+	globalActionIdx   int
+	repoActionIdx     int
+	modal             *modalState
+	logs              []string
+	status            string
+	postRefreshStatus string
+	busy              bool
+	busyLabel         string
+	busyRepoPath      string
+	busyRepoLabel     string
+	spinner           spinner.Model
+	width             int
+	height            int
 }
 
 type scanFinishedMsg struct {
@@ -193,6 +196,8 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case scanFinishedMsg:
 		m.busy = false
 		m.busyLabel = ""
+		m.busyRepoPath = ""
+		m.busyRepoLabel = ""
 		if msg.err != nil {
 			m.status = fmt.Sprintf("Scan failed: %v", msg.err)
 			return m, nil
@@ -202,7 +207,12 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cfg.LastScan = time.Now()
 		_ = config.Save(m.cfg)
 		m.applyFilters()
-		m.status = fmt.Sprintf("Loaded %d repositories from %s", len(m.repos), valueOrDash(m.cfg.RootPath))
+		if m.postRefreshStatus != "" {
+			m.status = m.postRefreshStatus
+			m.postRefreshStatus = ""
+		} else {
+			m.status = fmt.Sprintf("Loaded %d repositories from %s", len(m.repos), valueOrDash(m.cfg.RootPath))
+		}
 		return m, nil
 
 	case operationFinishedMsg:
@@ -214,8 +224,11 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selectedPath = msg.selectedPath
 		}
 		if msg.refresh {
+			m.postRefreshStatus = msg.status
 			return m.startRefresh("Refreshing dashboard after git operation...")
 		}
+		m.busyRepoPath = ""
+		m.busyRepoLabel = ""
 		return m, nil
 
 	case refreshTickMsg:
@@ -346,10 +359,12 @@ func (m dashboardModel) submitModal() (tea.Model, tea.Cmd) {
 		repo := modal.repo
 		m.busy = true
 		m.busyLabel = fmt.Sprintf("Committing all changes in %s ...", repo.Name)
+		m.busyRepoPath = repo.Path
+		m.busyRepoLabel = "Commit"
 		m.status = m.busyLabel
 		return m, tea.Batch(
 			m.spinner.Tick,
-			singleRepoActionCmd("Commit All", repo, func() (string, error) {
+			singleRepoActionCmd("Commit All", repo, true, func() (string, error) {
 				return gitops.CommitAll(repo.Path, message)
 			}),
 		)
@@ -362,10 +377,12 @@ func (m dashboardModel) submitModal() (tea.Model, tea.Cmd) {
 		repo := modal.repo
 		m.busy = true
 		m.busyLabel = fmt.Sprintf("Committing and pushing %s ...", repo.Name)
+		m.busyRepoPath = repo.Path
+		m.busyRepoLabel = "Push"
 		m.status = m.busyLabel
 		return m, tea.Batch(
 			m.spinner.Tick,
-			singleRepoActionCmd("Commit + Push", repo, func() (string, error) {
+			singleRepoActionCmd("Commit + Push", repo, true, func() (string, error) {
 				return gitops.CommitAndPush(repo.Path, message)
 			}),
 		)
@@ -499,10 +516,12 @@ func (m dashboardModel) activateRepoAction() (tea.Model, tea.Cmd) {
 		}
 		m.busy = true
 		m.busyLabel = fmt.Sprintf("Staging every change in %s ...", repo.Name)
+		m.busyRepoPath = repo.Path
+		m.busyRepoLabel = "Stage"
 		m.status = m.busyLabel
 		return m, tea.Batch(
 			m.spinner.Tick,
-			singleRepoActionCmd("Stage All", repo, func() (string, error) {
+			singleRepoActionCmd("Stage All", repo, false, func() (string, error) {
 				return gitops.StageAll(repo.Path)
 			}),
 		)
@@ -530,10 +549,12 @@ func (m dashboardModel) activateRepoAction() (tea.Model, tea.Cmd) {
 		}
 		m.busy = true
 		m.busyLabel = fmt.Sprintf("Pulling %s ...", repo.Name)
+		m.busyRepoPath = repo.Path
+		m.busyRepoLabel = "Pull"
 		m.status = m.busyLabel
 		return m, tea.Batch(
 			m.spinner.Tick,
-			singleRepoActionCmd("Pull", repo, func() (string, error) {
+			singleRepoActionCmd("Pull", repo, false, func() (string, error) {
 				return gitops.Pull(repo.Path)
 			}),
 		)
@@ -545,10 +566,12 @@ func (m dashboardModel) activateRepoAction() (tea.Model, tea.Cmd) {
 		}
 		m.busy = true
 		m.busyLabel = fmt.Sprintf("Pushing %s ...", repo.Name)
+		m.busyRepoPath = repo.Path
+		m.busyRepoLabel = "Push"
 		m.status = m.busyLabel
 		return m, tea.Batch(
 			m.spinner.Tick,
-			singleRepoActionCmd("Push", repo, func() (string, error) {
+			singleRepoActionCmd("Push", repo, false, func() (string, error) {
 				return gitops.Push(repo.Path)
 			}),
 		)
@@ -810,13 +833,34 @@ func scanReposCmd(root string) tea.Cmd {
 	}
 }
 
-func singleRepoActionCmd(title string, repo gitops.Repo, action func() (string, error)) tea.Cmd {
+func singleRepoActionCmd(title string, repo gitops.Repo, expectCleanAfter bool, action func() (string, error)) tea.Cmd {
 	return func() tea.Msg {
 		output, err := action()
 		status := fmt.Sprintf("%s finished for %s", title, repo.Name)
 		if err != nil {
 			status = fmt.Sprintf("%s failed for %s", title, repo.Name)
+			return operationFinishedMsg{
+				status:       status,
+				logs:         []string{formatLogBlock(title, repo, output, err)},
+				refresh:      true,
+				selectedPath: repo.Path,
+			}
 		}
+
+		if expectCleanAfter {
+			updated := gitops.Inspect(repo.Path)
+			if updated.LastError != "" {
+				output = joinOutputBlocks(output, "Post-action refresh warning: "+updated.LastError)
+			} else if updated.Dirty {
+				detail := fmt.Sprintf("Repository still has %d changed files after %s.", updated.ChangedCount, strings.ToLower(title))
+				if files := changedFilesSummary(updated, 3); files != "" {
+					detail += " Remaining: " + files
+				}
+				output = joinOutputBlocks(output, detail)
+				status = fmt.Sprintf("%s finished for %s, but %d files still changed", title, repo.Name, updated.ChangedCount)
+			}
+		}
+
 		return operationFinishedMsg{
 			status:       status,
 			logs:         []string{formatLogBlock(title, repo, output, err)},
@@ -1077,7 +1121,12 @@ func (m dashboardModel) renderCompactRepoSection(width, maxLines int) []string {
 
 func (m dashboardModel) renderCompactRepoRow(repo gitops.Repo, selected bool, width int) string {
 	statusToken := "clean"
-	if repo.Dirty {
+	if m.busyRepoPath != "" && repo.Path == m.busyRepoPath {
+		statusToken = m.spinner.View()
+		if m.busyRepoLabel != "" {
+			statusToken += " " + m.busyRepoLabel
+		}
+	} else if repo.Dirty {
 		statusToken = fmt.Sprintf("%dchg", repo.ChangedCount)
 	}
 	aheadBehind := ""
@@ -1106,8 +1155,13 @@ func (m dashboardModel) renderCompactBottom(maxLines, width int) []string {
 	var lines []string
 	repo, ok := m.selectedRepo()
 	if ok {
+		statusText := compactChangeStatus(repo)
+		if m.busyRepoPath != "" && repo.Path == m.busyRepoPath {
+			statusText = valueOrDefault(m.busyLabel, "Working...")
+		}
+
 		lines = append(lines, strings.Repeat("─", width))
-		lines = append(lines, truncateText(fmt.Sprintf("Selected %s | %s | %s", repo.Name, compactBranch(repo.Branch), compactChangeStatus(repo)), width))
+		lines = append(lines, truncateText(fmt.Sprintf("Selected %s | %s | %s", repo.Name, compactBranch(repo.Branch), statusText), width))
 
 		if maxLines-len(lines) > 0 {
 			lines = append(lines, truncateText("Path "+repo.Path, width))
@@ -1296,7 +1350,9 @@ func (m dashboardModel) renderRepoRow(repo gitops.Repo, selected bool, width int
 	chips := []string{
 		renderBadge(branchBadgeLabel(repo), styles.badgeMuted),
 	}
-	if repo.Dirty {
+	if m.busyRepoPath != "" && repo.Path == m.busyRepoPath {
+		chips = append(chips, renderBadge(fmt.Sprintf("%s %s", m.spinner.View(), valueOrDefault(m.busyRepoLabel, "Working")), styles.badgeBusy))
+	} else if repo.Dirty {
 		chips = append(chips, renderBadge(fmt.Sprintf("%d changed", repo.ChangedCount), styles.badgeDirty))
 	} else {
 		chips = append(chips, renderBadge("clean", styles.badgeClean))
@@ -1328,6 +1384,11 @@ func (m dashboardModel) renderSelectedRepo(width int) string {
 		return styles.emptyState.Render("Select a repository from the list to inspect it and run actions.")
 	}
 
+	statusText := statusSummary(repo)
+	if m.busyRepoPath != "" && repo.Path == m.busyRepoPath {
+		statusText = fmt.Sprintf("%s %s", m.spinner.View(), valueOrDefault(m.busyLabel, "Working..."))
+	}
+
 	lines := []string{
 		styles.repoTitle.Render(repo.Name),
 		renderDetailLine("Path", repo.Path, width),
@@ -1335,7 +1396,8 @@ func (m dashboardModel) renderSelectedRepo(width int) string {
 		renderDetailLine("Remote", valueOrDash(repo.Remote), width),
 		renderDetailLine("Last Commit", lastCommitSummary(repo), width),
 		renderDetailLine("Activity", formatTime(repo.LastActivity), width),
-		renderDetailLine("Status", statusSummary(repo), width),
+		renderDetailLine("Status", statusText, width),
+		renderDetailLine("Files", changedFilesSummary(repo, 4), width),
 	}
 
 	return strings.Join(lines, "\n")
@@ -1512,6 +1574,18 @@ func renderDetailLine(label, value string, width int) string {
 	return styles.detailLabel.Render(label+":") + " " + styles.detailValue.Render(truncateText(value, maxWidth))
 }
 
+func joinOutputBlocks(parts ...string) string {
+	filtered := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		filtered = append(filtered, part)
+	}
+	return strings.Join(filtered, "\n")
+}
+
 func overlayCentered(base, overlay string, width, height int) string {
 	width = maxInt(1, width)
 	height = maxInt(1, height)
@@ -1636,6 +1710,30 @@ func compactChangeStatus(repo gitops.Repo) string {
 		parts = append(parts, fmt.Sprintf("↑%d ↓%d", repo.Ahead, repo.Behind))
 	}
 	return strings.Join(parts, " | ")
+}
+
+func changedFilesSummary(repo gitops.Repo, maxFiles int) string {
+	if !repo.Dirty {
+		return "Working tree clean"
+	}
+	if len(repo.ChangedFiles) == 0 {
+		return fmt.Sprintf("%d changed file(s)", repo.ChangedCount)
+	}
+	if maxFiles <= 0 {
+		maxFiles = len(repo.ChangedFiles)
+	}
+
+	display := repo.ChangedFiles
+	if len(display) > maxFiles {
+		display = display[:maxFiles]
+	}
+
+	summary := strings.Join(display, ", ")
+	if len(repo.ChangedFiles) > len(display) {
+		summary += fmt.Sprintf(", +%d more", len(repo.ChangedFiles)-len(display))
+	}
+
+	return summary
 }
 
 func defaultCommitMessage() string {
