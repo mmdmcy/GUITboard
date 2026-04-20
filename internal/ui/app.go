@@ -438,7 +438,10 @@ func (m dashboardModel) activateFocused() (tea.Model, tea.Cmd) {
 		if len(m.filtered) == 0 {
 			return m, nil
 		}
-		m.focus = focusRepoActions
+		if m.focusFirstEnabledRepoAction() {
+			return m, nil
+		}
+		m.status = "No repo actions are available for the selected repository."
 		return m, nil
 	case focusRepoActions:
 		return m.activateRepoAction()
@@ -668,6 +671,7 @@ func (m *dashboardModel) restoreSelection() {
 
 	m.selectedIdx = 0
 	m.selectedPath = m.filtered[0].Path
+	m.normalizeActionFocus()
 }
 
 func (m *dashboardModel) moveLeft() {
@@ -679,8 +683,8 @@ func (m *dashboardModel) moveLeft() {
 	case focusRepoList:
 		m.focus = focusGlobalActions
 	case focusRepoActions:
-		if m.repoActionIdx > 0 {
-			m.repoActionIdx--
+		if idx, ok := previousEnabledActionIndex(m.repoActionButtons(), m.repoActionIdx); ok {
+			m.repoActionIdx = idx
 		} else {
 			m.focus = focusRepoList
 		}
@@ -697,11 +701,13 @@ func (m *dashboardModel) moveRight() {
 		}
 	case focusRepoList:
 		if len(m.filtered) > 0 {
-			m.focus = focusRepoActions
+			if !m.focusFirstEnabledRepoAction() {
+				m.status = "No repo actions are available for the selected repository."
+			}
 		}
 	case focusRepoActions:
-		if m.repoActionIdx < len(m.repoActionButtons())-1 {
-			m.repoActionIdx++
+		if idx, ok := nextEnabledActionIndex(m.repoActionButtons(), m.repoActionIdx); ok {
+			m.repoActionIdx = idx
 		}
 	}
 }
@@ -714,6 +720,7 @@ func (m *dashboardModel) moveUp() {
 		if m.selectedIdx > 0 {
 			m.selectedIdx--
 			m.selectedPath = m.filtered[m.selectedIdx].Path
+			m.normalizeActionFocus()
 			m.ensureRepoVisible()
 		} else {
 			m.focus = focusGlobalActions
@@ -733,6 +740,7 @@ func (m *dashboardModel) moveDown() {
 		if m.selectedIdx >= 0 && m.selectedIdx < len(m.filtered)-1 {
 			m.selectedIdx++
 			m.selectedPath = m.filtered[m.selectedIdx].Path
+			m.normalizeActionFocus()
 			m.ensureRepoVisible()
 		}
 	case focusRepoActions:
@@ -746,6 +754,29 @@ func (m *dashboardModel) stepBackFocus() {
 		m.focus = focusRepoList
 	case focusRepoList:
 		m.focus = focusGlobalActions
+	}
+}
+
+func (m *dashboardModel) focusFirstEnabledRepoAction() bool {
+	if idx, ok := firstEnabledActionIndex(m.repoActionButtons()); ok {
+		m.repoActionIdx = idx
+		m.focus = focusRepoActions
+		return true
+	}
+	return false
+}
+
+func (m *dashboardModel) normalizeActionFocus() {
+	if idx, ok := firstEnabledActionIndex(m.repoActionButtons()); ok {
+		if m.repoActionIdx < 0 || m.repoActionIdx >= len(m.repoActionButtons()) || !m.repoActionButtons()[m.repoActionIdx].enabled {
+			m.repoActionIdx = idx
+		}
+		return
+	}
+
+	m.repoActionIdx = 0
+	if m.focus == focusRepoActions {
+		m.focus = focusRepoList
 	}
 }
 
@@ -1016,16 +1047,16 @@ func (m dashboardModel) View() string {
 
 func (m dashboardModel) renderFullView() string {
 	header := m.renderHeader()
-	actions := renderPanel("Dashboard Actions", m.renderGlobalActionRows(m.width), m.width)
+	actions := renderSectionPanel("Dashboard Actions", m.renderGlobalActionRows(m.width), m.width, m.focus == focusGlobalActions)
 	stats := m.renderSummaryRow()
 
 	layout := m.layout()
-	leftPanel := renderPanel("Repositories", m.renderRepoList(layout.leftWidth), layout.leftWidth)
+	leftPanel := renderSectionPanel("Repositories", m.renderRepoList(layout.leftWidth), layout.leftWidth, m.focus == focusRepoList)
 	rightBody := lipgloss.JoinVertical(
 		lipgloss.Left,
-		renderPanel("Selected Repository", m.renderSelectedRepo(layout.rightWidth), layout.rightWidth),
-		renderPanel("Repo Actions", m.renderRepoActionRows(layout.rightWidth), layout.rightWidth),
-		renderPanel("Operation Log", m.renderLogBlocks(layout.logLines), layout.rightWidth),
+		renderSectionPanel("Selected Repository", m.renderSelectedRepo(layout.rightWidth), layout.rightWidth, false),
+		renderSectionPanel("Repo Actions", m.renderRepoActionRows(layout.rightWidth), layout.rightWidth, m.focus == focusRepoActions),
+		renderSectionPanel("Operation Log", m.renderLogBlocks(layout.logLines), layout.rightWidth, false),
 	)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, " ", rightBody)
 
@@ -1047,6 +1078,7 @@ func (m dashboardModel) renderCompactView() string {
 	topLines := []string{
 		m.renderCompactTitleLine(width),
 		m.renderCompactContextLine(width),
+		m.renderCompactFocusLine(width),
 	}
 
 	actionLines := splitNonEmptyLines(m.renderWrappedActions(m.globalActionButtons(), m.globalActionIdx, m.focus == focusGlobalActions, width))
@@ -1093,8 +1125,14 @@ func (m dashboardModel) renderCompactContextLine(width int) string {
 	return styles.headerText.Render(truncateText(context, width))
 }
 
+func (m dashboardModel) renderCompactFocusLine(width int) string {
+	line := "Focus: " + m.focusLabel()
+	return styles.detailLabel.Render(truncateText(line, width))
+}
+
 func (m dashboardModel) renderCompactRepoSection(width, maxLines int) []string {
 	lines := []string{
+		renderCompactSectionLabel("Repositories", m.focus == focusRepoList, width),
 		styles.mutedText.Render(
 			truncateText(
 				fmt.Sprintf("%d shown of %d total repositories", len(m.filtered), len(m.repos)),
@@ -1191,6 +1229,11 @@ func (m dashboardModel) renderCompactBottom(maxLines, width int) []string {
 	}
 
 	if remaining := maxLines - len(lines); remaining > 0 {
+		lines = append(lines, renderCompactSectionLabel("Repo Actions", m.focus == focusRepoActions, width))
+		remaining--
+	}
+
+	if remaining := maxLines - len(lines); remaining > 0 {
 		actionLines := splitNonEmptyLines(m.renderWrappedActions(m.repoActionButtons(), m.repoActionIdx, m.focus == focusRepoActions, width))
 		if len(actionLines) > remaining {
 			actionLines = actionLines[:remaining]
@@ -1224,6 +1267,19 @@ func (m dashboardModel) compactLogPreview() string {
 	}
 
 	return first[0]
+}
+
+func (m dashboardModel) focusLabel() string {
+	switch m.focus {
+	case focusGlobalActions:
+		return "Dashboard Actions"
+	case focusRepoList:
+		return "Repositories"
+	case focusRepoActions:
+		return "Repo Actions"
+	default:
+		return "Repositories"
+	}
 }
 
 func (m dashboardModel) isCompactLayout() bool {
@@ -1546,20 +1602,31 @@ func (m dashboardModel) visibleRepoCount() int {
 	return maxInt(5, (m.height-17)/3)
 }
 
-func renderPanel(title, body string, width int) string {
+func renderSectionPanel(title, body string, width int, active bool) string {
 	panelWidth := maxInt(24, width)
-	innerWidth := panelWidth - styles.panel.GetHorizontalFrameSize()
+	panelStyle := styles.panel
+	titleStyle := styles.panelTitle
+	if active {
+		panelStyle = styles.panelActive
+		titleStyle = styles.panelTitleActive
+	}
+
+	innerWidth := panelWidth - panelStyle.GetHorizontalFrameSize()
 	if innerWidth < 10 {
 		innerWidth = 10
 	}
 
 	lines := make([]string, 0, 2)
 	if strings.TrimSpace(title) != "" {
-		lines = append(lines, styles.panelTitle.Width(innerWidth).Render(title))
+		lines = append(lines, titleStyle.Width(innerWidth).Render(title))
 	}
 	lines = append(lines, lipgloss.NewStyle().Width(innerWidth).Render(body))
 
-	return styles.panel.Width(panelWidth).Render(strings.Join(lines, "\n"))
+	return panelStyle.Width(panelWidth).Render(strings.Join(lines, "\n"))
+}
+
+func renderPanel(title, body string, width int) string {
+	return renderSectionPanel(title, body, width, false)
 }
 
 func renderStatCard(label, value string, width int) string {
@@ -1584,6 +1651,33 @@ func renderActionButton(button actionButton, selected bool, focused bool) string
 	}
 }
 
+func firstEnabledActionIndex(buttons []actionButton) (int, bool) {
+	for idx, button := range buttons {
+		if button.enabled {
+			return idx, true
+		}
+	}
+	return 0, false
+}
+
+func nextEnabledActionIndex(buttons []actionButton, current int) (int, bool) {
+	for idx := current + 1; idx < len(buttons); idx++ {
+		if buttons[idx].enabled {
+			return idx, true
+		}
+	}
+	return 0, false
+}
+
+func previousEnabledActionIndex(buttons []actionButton, current int) (int, bool) {
+	for idx := current - 1; idx >= 0; idx-- {
+		if buttons[idx].enabled {
+			return idx, true
+		}
+	}
+	return 0, false
+}
+
 func renderBadge(label string, style lipgloss.Style) string {
 	return style.Render(label)
 }
@@ -1591,6 +1685,15 @@ func renderBadge(label string, style lipgloss.Style) string {
 func renderDetailLine(label, value string, width int) string {
 	maxWidth := maxInt(16, width-styles.panel.GetHorizontalFrameSize()-15)
 	return styles.detailLabel.Render(label+":") + " " + styles.detailValue.Render(truncateText(value, maxWidth))
+}
+
+func renderCompactSectionLabel(label string, active bool, width int) string {
+	text := label
+	if active {
+		text = "> " + text
+		return styles.panelTitleActive.Width(width).Render(truncateText(text, width))
+	}
+	return styles.panelTitle.Width(width).Render(truncateText(text, width))
 }
 
 func joinOutputBlocks(parts ...string) string {

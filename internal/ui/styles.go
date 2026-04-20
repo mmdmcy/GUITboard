@@ -3,38 +3,40 @@ package ui
 import "github.com/charmbracelet/lipgloss"
 
 type uiStyles struct {
-	title          lipgloss.Style
-	headerDivider  lipgloss.Style
-	headerText     lipgloss.Style
-	panel          lipgloss.Style
-	panelTitle     lipgloss.Style
-	statCard       lipgloss.Style
-	statLabel      lipgloss.Style
-	statValue      lipgloss.Style
-	actionButton   lipgloss.Style
-	actionSelected lipgloss.Style
-	actionActive   lipgloss.Style
-	actionDisabled lipgloss.Style
-	repoRow        lipgloss.Style
-	repoSelected   lipgloss.Style
-	repoTitle      lipgloss.Style
-	mutedText      lipgloss.Style
-	sectionInfo    lipgloss.Style
-	emptyState     lipgloss.Style
-	detailLabel    lipgloss.Style
-	detailValue    lipgloss.Style
-	badgeDirty     lipgloss.Style
-	badgeClean     lipgloss.Style
-	badgeAhead     lipgloss.Style
-	badgeBehind    lipgloss.Style
-	badgeBusy      lipgloss.Style
-	badgeMuted     lipgloss.Style
-	modalBox       lipgloss.Style
-	modalTitle     lipgloss.Style
-	modalText      lipgloss.Style
-	modalInput     lipgloss.Style
-	help           lipgloss.Style
-	spinner        lipgloss.Style
+	title            lipgloss.Style
+	headerDivider    lipgloss.Style
+	headerText       lipgloss.Style
+	panel            lipgloss.Style
+	panelActive      lipgloss.Style
+	panelTitle       lipgloss.Style
+	panelTitleActive lipgloss.Style
+	statCard         lipgloss.Style
+	statLabel        lipgloss.Style
+	statValue        lipgloss.Style
+	actionButton     lipgloss.Style
+	actionSelected   lipgloss.Style
+	actionActive     lipgloss.Style
+	actionDisabled   lipgloss.Style
+	repoRow          lipgloss.Style
+	repoSelected     lipgloss.Style
+	repoTitle        lipgloss.Style
+	mutedText        lipgloss.Style
+	sectionInfo      lipgloss.Style
+	emptyState       lipgloss.Style
+	detailLabel      lipgloss.Style
+	detailValue      lipgloss.Style
+	badgeDirty       lipgloss.Style
+	badgeClean       lipgloss.Style
+	badgeAhead       lipgloss.Style
+	badgeBehind      lipgloss.Style
+	badgeBusy        lipgloss.Style
+	badgeMuted       lipgloss.Style
+	modalBox         lipgloss.Style
+	modalTitle       lipgloss.Style
+	modalText        lipgloss.Style
+	modalInput       lipgloss.Style
+	help             lipgloss.Style
+	spinner          lipgloss.Style
 }
 
 var styles = newUIStyles()
@@ -69,9 +71,21 @@ func newUIStyles() uiStyles {
 			Background(panelFill).
 			Padding(0, 1).
 			MarginBottom(1),
+		panelActive: lipgloss.NewStyle().
+			Border(lipgloss.DoubleBorder()).
+			BorderForeground(accent).
+			Background(panelFill).
+			Padding(0, 1).
+			MarginBottom(1),
 		panelTitle: lipgloss.NewStyle().
 			Bold(true).
 			Foreground(accent).
+			MarginBottom(1),
+		panelTitleActive: lipgloss.NewStyle().
+			Bold(true).
+			Foreground(accentStrong).
+			Background(accent).
+			Padding(0, 1).
 			MarginBottom(1),
 		statCard: lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).

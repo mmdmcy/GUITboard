@@ -37,8 +37,14 @@ func TestOpenModalStoresSelectedRepo(t *testing.T) {
 
 func TestEscBacksOutOfRepoSections(t *testing.T) {
 	model := newDashboardModel(configStub())
+	model.busy = false
 	model.filtered = []gitops.Repo{
-		{Name: "kapotteke", Path: "/tmp/kapotteke"},
+		{
+			Name:     "kapotteke",
+			Path:     "/tmp/kapotteke",
+			Remote:   "https://github.com/example/kapotteke.git",
+			Upstream: "origin/main",
+		},
 	}
 	model.selectedIdx = 0
 	model.selectedPath = "/tmp/kapotteke"
@@ -59,8 +65,14 @@ func TestEscBacksOutOfRepoSections(t *testing.T) {
 
 func TestArrowBoundariesMoveAcrossSections(t *testing.T) {
 	model := newDashboardModel(configStub())
+	model.busy = false
 	model.filtered = []gitops.Repo{
-		{Name: "kapotteke", Path: "/tmp/kapotteke"},
+		{
+			Name:     "kapotteke",
+			Path:     "/tmp/kapotteke",
+			Remote:   "https://github.com/example/kapotteke.git",
+			Upstream: "origin/main",
+		},
 	}
 	model.selectedIdx = 0
 	model.selectedPath = "/tmp/kapotteke"
@@ -81,12 +93,57 @@ func TestArrowBoundariesMoveAcrossSections(t *testing.T) {
 		t.Fatalf("expected up from first repo row to move to global actions, got %v", upResult.focus)
 	}
 
+	leftResult.focus = focusRepoList
+	leftResult.selectedIdx = 0
+	updated, _ = leftResult.updateDashboard(tea.KeyMsg{Type: tea.KeyRight})
+	rightFromRepos := updated.(dashboardModel)
+	if rightFromRepos.focus != focusRepoActions {
+		t.Fatalf("expected right from repo list to move to repo actions, got %v", rightFromRepos.focus)
+	}
+
 	upResult.focus = focusGlobalActions
 	upResult.globalActionIdx = len(upResult.globalActionButtons()) - 1
 	updated, _ = upResult.updateDashboard(tea.KeyMsg{Type: tea.KeyRight})
 	rightResult := updated.(dashboardModel)
 	if rightResult.focus != focusRepoList {
 		t.Fatalf("expected right from last global action to move to repo list, got %v", rightResult.focus)
+	}
+}
+
+func TestRepoActionsSkipDisabledButtons(t *testing.T) {
+	model := newDashboardModel(configStub())
+	model.busy = false
+	model.filtered = []gitops.Repo{
+		{
+			Name:     "kapotteke",
+			Path:     "/tmp/kapotteke",
+			Remote:   "https://github.com/example/kapotteke.git",
+			Upstream: "origin/main",
+		},
+	}
+	model.selectedIdx = 0
+	model.selectedPath = "/tmp/kapotteke"
+	model.focus = focusRepoList
+
+	updated, _ := model.updateDashboard(tea.KeyMsg{Type: tea.KeyRight})
+	afterEnterRepoActions := updated.(dashboardModel)
+	if afterEnterRepoActions.focus != focusRepoActions {
+		t.Fatalf("expected right from repo list to enter repo actions, got %v", afterEnterRepoActions.focus)
+	}
+	if afterEnterRepoActions.repoActionIdx != int(repoActionPull) {
+		t.Fatalf("expected first enabled repo action to be Pull, got index %d", afterEnterRepoActions.repoActionIdx)
+	}
+
+	updated, _ = afterEnterRepoActions.updateDashboard(tea.KeyMsg{Type: tea.KeyRight})
+	afterMoveRight := updated.(dashboardModel)
+	if afterMoveRight.repoActionIdx != int(repoActionPush) {
+		t.Fatalf("expected right to skip disabled actions and land on Push, got index %d", afterMoveRight.repoActionIdx)
+	}
+
+	updated, _ = afterMoveRight.updateDashboard(tea.KeyMsg{Type: tea.KeyLeft})
+	afterMoveLeft := updated.(dashboardModel)
+	if afterMoveLeft.repoActionIdx != int(repoActionPull) {
+		t.Fatalf("expected left to skip disabled actions and land on Pull, got index %d", afterMoveLeft.repoActionIdx)
 	}
 }
 
