@@ -56,6 +56,24 @@ Then launch the binary for your platform:
 ./GUITboard
 ```
 
+## PortUI
+
+If you have the sibling `portui` repo checked out next to `GUITboard`, you can use the PortUI app in [`portui/`](./portui) to drive the common cross-platform development actions from one manifest.
+
+Linux or macOS:
+
+```bash
+sh ../portui/portui.sh --manifest-dir ./portui
+```
+
+Windows:
+
+```powershell
+..\portui\portui.ps1 -ManifestDir .\portui
+```
+
+The bundled actions cover running the dashboard from source, running the Go test suite, and building a host binary into `dist/`.
+
 ## How it works
 
 1. Start the app.
