@@ -32,6 +32,9 @@ usage() {
     cat <<'EOF'
 Usage: sh ./portui.sh [--manifest-dir DIR | --workspace DIR] [--project PROJECT_ID] [--list-projects] [--list] [--run ACTION_ID]
 
+PortUI opens project-local terminal menus from portui/ or .portui/ manifests.
+It does not build executables; the launcher scripts are the portable entrypoints.
+
 Options:
   --manifest-dir DIR   Path to one PortUI manifest directory.
   --workspace DIR      Path to a workspace containing project manifests in repo/portui or repo/.portui.
@@ -122,6 +125,14 @@ append_pipe_value() {
     fi
     escaped=$(quote_single "$merged")
     eval "$var_name='$escaped'"
+}
+
+is_truthy() {
+    value=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+    case "$value" in
+        1|true|yes|on) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 detect_os() {
@@ -503,6 +514,7 @@ reset_action_state() {
     ACTION_TITLE=""
     ACTION_DESCRIPTION=""
     ACTION_TIMEOUT_SECONDS="30"
+    ACTION_INTERACTIVE="0"
     ACTION_PROGRAM=""
     ACTION_ARGS=""
     ACTION_CWD=""
@@ -541,6 +553,7 @@ parse_action_line() {
         TITLE) ACTION_TITLE=$value ;;
         DESCRIPTION) ACTION_DESCRIPTION=$value ;;
         TIMEOUT_SECONDS) ACTION_TIMEOUT_SECONDS=$value ;;
+        INTERACTIVE) ACTION_INTERACTIVE=$value ;;
         PROGRAM) ACTION_PROGRAM=$value ;;
         ARGS) ACTION_ARGS=$value ;;
         CWD) ACTION_CWD=$value ;;
@@ -707,6 +720,50 @@ display_command() {
 }
 
 run_resolved_action() {
+    if is_truthy "$ACTION_INTERACTIVE"; then
+        start_epoch=$(date +%s)
+
+        (
+            cd "$RESOLVED_CWD" || exit 1
+
+            old_ifs=$IFS
+            IFS='|'
+            if [ -n "$RESOLVED_ENV" ]; then
+                set -- $RESOLVED_ENV
+            else
+                set --
+            fi
+            IFS=$old_ifs
+
+            for pair in "$@"; do
+                env_key=${pair%%=*}
+                env_value=${pair#*=}
+                export "$env_key=$env_value"
+            done
+            export PORTUI_INTERACTIVE=1
+
+            old_ifs=$IFS
+            IFS='|'
+            if [ -n "$RESOLVED_ARGS" ]; then
+                set -- $RESOLVED_ARGS
+            else
+                set --
+            fi
+            IFS=$old_ifs
+
+            exec "$RESOLVED_PROGRAM" "$@"
+        )
+        exit_code=$?
+
+        end_epoch=$(date +%s)
+        duration=$((end_epoch - start_epoch))
+        printf '\n'
+        printf '%s\n' "Status: exit code $exit_code"
+        printf '%s\n' "Duration: ${duration}s"
+        printf '\n'
+        return "$exit_code"
+    fi
+
     output_file=$(mktemp)
     timeout_flag_file=$(mktemp)
     start_epoch=$(date +%s)
@@ -895,6 +952,9 @@ run_action_by_id() {
     printf '%s' "Command: "
     display_command
     printf '\n'
+    if is_truthy "$ACTION_INTERACTIVE"; then
+        printf '%s\n' "I/O: interactive terminal"
+    fi
 
     if [ -n "$RESOLVED_ENV" ]; then
         printf '%s\n' "Environment overrides:"
@@ -1000,6 +1060,9 @@ interactive_action_menu() {
         printf '%s' "Command: "
         display_command
         printf '\n'
+        if is_truthy "$ACTION_INTERACTIVE"; then
+            printf '%s\n' "I/O: interactive terminal"
+        fi
 
         if [ -n "$RESOLVED_ENV" ]; then
             printf '%s\n' "Environment overrides:"

@@ -32,7 +32,11 @@ GUITboard is a local-only terminal dashboard for managing a whole folder of Git 
 go run ./cmd/guitboard
 ```
 
-## Build an executable
+## Optional Local Build
+
+You do not need to commit or share an executable for GUITboard to be portable. The normal cross-platform workflow is to clone the repo and run it through Go or the repo-local PortUI launchers.
+
+If you want a local binary for the machine you are currently on:
 
 Windows:
 
@@ -46,7 +50,7 @@ Linux Mint:
 go build -o GUITboard ./cmd/guitboard
 ```
 
-Then launch the binary for your platform:
+Then launch that local binary for your platform:
 
 ```powershell
 .\GUITboard.exe

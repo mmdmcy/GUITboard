@@ -26,6 +26,9 @@ function Show-Usage {
     @'
 Usage: .\portui.ps1 [-ManifestDir DIR | -WorkspaceDir DIR] [-Project ID] [-ListProjects] [-List] [-Run ACTION_ID]
 
+PortUI opens project-local terminal menus from portui\ or .portui\ manifests.
+It does not build executables; the launcher scripts are the portable entrypoints.
+
 Options:
   -ManifestDir DIR   Path to one PortUI manifest directory.
   -WorkspaceDir DIR  Path to a workspace containing project manifests in repo\portui or repo\.portui.
@@ -122,6 +125,14 @@ function Get-HostOSName {
     }
 
     return 'unknown'
+}
+
+function Test-PortUITruthy {
+    param(
+        [string]$Value
+    )
+
+    return $Value -match '^(?i:1|true|yes|on)$'
 }
 
 function Get-ResolvedDirectory {
@@ -447,6 +458,7 @@ function Load-Action {
         Title = ''
         Description = ''
         TimeoutSeconds = 30
+        Interactive = $false
         Base = New-Variant
         Posix = New-Variant
         Linux = New-Variant
@@ -466,10 +478,11 @@ function Load-Action {
             'DESCRIPTION' { $action.Description = $value }
             'TIMEOUT_SECONDS' {
                 $parsed = 0
-                if ([int]::TryParse($value, [ref]$parsed) -and $parsed -gt 0) {
+                if ([int]::TryParse($value, [ref]$parsed) -and $parsed -ge 0) {
                     $action.TimeoutSeconds = $parsed
                 }
             }
+            'INTERACTIVE' { $action.Interactive = Test-PortUITruthy -Value $value }
             'PROGRAM' { $action.Base.Program = $value }
             'ARGS' { $action.Base.Args = $value }
             'CWD' { $action.Base.Cwd = $value }
@@ -657,11 +670,11 @@ function Format-DisplayCommand {
 
 function Build-ArgumentString {
     param(
-        [string[]]$Args
+        [string[]]$ArgList
     )
 
     $parts = @()
-    foreach ($arg in $Args) {
+    foreach ($arg in $ArgList) {
         if ([string]::IsNullOrEmpty($arg)) {
             $parts += '""'
         } elseif ($arg -match '[\s"]') {
@@ -680,9 +693,57 @@ function Invoke-ResolvedAction {
         [hashtable]$Resolved
     )
 
+    if ($Action.Interactive) {
+        $start = Get-Date
+        $previousLocation = (Get-Location).Path
+        $previousEnv = @{}
+        $Resolved.Env['PORTUI_INTERACTIVE'] = '1'
+
+        foreach ($key in $Resolved.Env.Keys) {
+            $envPath = "Env:$key"
+            $existing = Get-Item -Path $envPath -ErrorAction SilentlyContinue
+            if ($existing) {
+                $previousEnv[$key] = @{ Exists = $true; Value = $existing.Value }
+            } else {
+                $previousEnv[$key] = @{ Exists = $false; Value = '' }
+            }
+            Set-Item -Path $envPath -Value ([string]$Resolved.Env[$key])
+        }
+
+        $exitCode = 0
+        try {
+            Set-Location -LiteralPath $Resolved.Cwd
+            $resolvedArgs = @(Split-Args $Resolved.Args)
+            & $Resolved.Program @resolvedArgs
+            if ($null -ne $LASTEXITCODE) {
+                $exitCode = $LASTEXITCODE
+            }
+        } catch {
+            Write-Host $_
+            $exitCode = 1
+        } finally {
+            Set-Location -LiteralPath $previousLocation
+            foreach ($key in $previousEnv.Keys) {
+                $envPath = "Env:$key"
+                if ($previousEnv[$key].Exists) {
+                    Set-Item -Path $envPath -Value $previousEnv[$key].Value
+                } else {
+                    Remove-Item -Path $envPath -ErrorAction SilentlyContinue
+                }
+            }
+        }
+
+        $duration = [int]((Get-Date) - $start).TotalSeconds
+        Write-Host ""
+        Write-Host "Status: exit code $exitCode"
+        Write-Host "Duration: ${duration}s"
+        Write-Host ""
+        return $exitCode
+    }
+
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $Resolved.Program
-    $psi.Arguments = Build-ArgumentString -Args (Split-Args $Resolved.Args)
+    $psi.Arguments = Build-ArgumentString -ArgList (Split-Args $Resolved.Args)
     $psi.WorkingDirectory = $Resolved.Cwd
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
@@ -699,9 +760,13 @@ function Invoke-ResolvedAction {
     [void]$process.Start()
 
     $timedOut = $false
-    if (-not $process.WaitForExit($Action.TimeoutSeconds * 1000)) {
-        $timedOut = $true
-        try { $process.Kill() } catch {}
+    if ($Action.TimeoutSeconds -gt 0) {
+        if (-not $process.WaitForExit($Action.TimeoutSeconds * 1000)) {
+            $timedOut = $true
+            try { $process.Kill() } catch {}
+            $process.WaitForExit()
+        }
+    } else {
         $process.WaitForExit()
     }
 
@@ -747,6 +812,9 @@ function Show-ActionPreview {
     Write-Host "Working directory: $($Resolved.Cwd)"
     Write-Host "Resolution: $($Resolved.Source)"
     Write-Host "Command: $(Format-DisplayCommand -Resolved $Resolved)"
+    if ($Action.Interactive) {
+        Write-Host 'I/O: interactive terminal'
+    }
 
     if ($Resolved.Env.Count -gt 0) {
         Write-Host "Environment overrides:"
