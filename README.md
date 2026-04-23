@@ -1,6 +1,6 @@
 # GUITboard
 
-GUITboard is a local-only terminal dashboard for managing a whole folder of Git repositories from one keyboard-first interface.
+GUITboard is a local-only cross-platform terminal dashboard (TUI) for managing a whole folder of Git repositories from one keyboard-first interface.
 
 ## Features
 
@@ -13,11 +13,11 @@ GUITboard is a local-only terminal dashboard for managing a whole folder of Git 
 - Supports bulk commit-and-push across every changed repository with one shared commit message.
 - Clones a repository into the current root from either a full Git URL or `owner/repo` shorthand.
 - Refreshes automatically every 30 seconds and stores the selected root folder locally per user.
-- Defaults to `Documents/GitHub` on Windows and `~/Documents/github` on Linux Mint.
+- Defaults to common Git roots such as `Documents/GitHub` on Windows and `~/Documents/github`, `~/Developer`, or `~/Code` on Unix-like systems.
 
 ## Requirements
 
-- Windows 11 or Windows 10, or Linux Mint
+- Windows 10 or 11, macOS, or Linux
 - [Git](https://git-scm.com/)
 - Go 1.25+ if you want to run or build from source
 
@@ -26,7 +26,27 @@ GUITboard is a local-only terminal dashboard for managing a whole folder of Git 
 - A terminal around `96x28` or larger gives the dashboard enough room to show the list, details, actions, and log together.
 - No GUI toolkit or desktop-specific graphics packages are required anymore.
 
-## Run from source
+## Quick Start
+
+Linux or macOS:
+
+```bash
+sh ./portui.sh --run run-dashboard
+```
+
+Windows PowerShell:
+
+```powershell
+.\portui.ps1 -Run run-dashboard
+```
+
+Command Prompt:
+
+```cmd
+portui.cmd --run run-dashboard
+```
+
+Direct Go entrypoint:
 
 ```bash
 go run ./cmd/guitboard
@@ -34,47 +54,51 @@ go run ./cmd/guitboard
 
 ## Optional Local Build
 
-You do not need to commit or share an executable for GUITboard to be portable. The normal cross-platform workflow is to clone the repo and run it through Go or the repo-local PortUI launchers.
+This is secondary. The normal portable workflow is to clone the repo and run the TUI through Go or the repo-local PortUI launchers.
 
 If you want a local binary for the machine you are currently on:
 
 Windows:
 
 ```powershell
-go build -o GUITboard.exe ./cmd/guitboard
+if (-not (Test-Path dist)) { New-Item -ItemType Directory -Path dist | Out-Null }
+go build -o dist/GUITboard.exe ./cmd/guitboard
 ```
 
-Linux Mint:
+Linux or macOS:
 
 ```bash
-go build -o GUITboard ./cmd/guitboard
+mkdir -p dist
+go build -o dist/GUITboard ./cmd/guitboard
 ```
 
 Then launch that local binary for your platform:
 
 ```powershell
-.\GUITboard.exe
+.\dist\GUITboard.exe
 ```
 
 ```bash
-./GUITboard
+./dist/GUITboard
 ```
 
 ## PortUI
 
-GUITboard vendors the PortUI runtime into this repo, so PortUI can act as the repo-local cross-platform TUI layer without needing a separate checkout.
+GUITboard vendors the PortUI runtime into this repo, so PortUI acts as the repo-local launcher layer for this TUI without needing a separate checkout.
 
 Linux or macOS:
 
 ```bash
 sh ./portui.sh --list
+sh ./portui.sh --run run-dashboard
 sh ./portui.sh --run test
 ```
 
-Windows:
+Windows PowerShell:
 
 ```powershell
 .\portui.ps1 -List
+.\portui.ps1 -Run run-dashboard
 .\portui.ps1 -Run test
 ```
 
@@ -84,7 +108,7 @@ Command Prompt:
 portui.cmd --list
 ```
 
-The bundled actions cover running the dashboard from source, running the Go test suite, and building a host binary into `dist/`. The action definitions live in [`portui/`](./portui), while the vendored runtime lives in [`.portui-runtime/`](./.portui-runtime).
+The bundled actions cover running the dashboard from source, running the Go test suite, and optionally building a local binary into `dist/`. The action definitions live in [`portui/`](./portui), while the vendored runtime lives in [`.portui-runtime/`](./.portui-runtime).
 
 If you maintain both repos and want to refresh the vendored PortUI engine from the source `portui` repo:
 
@@ -110,6 +134,6 @@ The app remembers the last folder you picked in your user config directory, so i
 
 ## Repository notes
 
-- Build artifacts like `GUITboard` and `GUITboard.exe` are ignored by Git.
+- Local build artifacts like `guitboard`, `GUITboard`, `dist/`, and `*.exe` are ignored by Git.
 - User-specific app settings are stored outside the repository.
 - `portui.sh`, `portui.ps1`, `portui.cmd`, and `.portui-runtime/` are the vendored PortUI engine entrypoints for this repo.

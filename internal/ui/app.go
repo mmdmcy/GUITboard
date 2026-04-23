@@ -1900,19 +1900,38 @@ func defaultRootPath() string {
 }
 
 func rootPathCandidates(home string) []string {
-	if runtime.GOOS == "windows" {
+	return rootPathCandidatesForGOOS(home, runtime.GOOS)
+}
+
+func rootPathCandidatesForGOOS(home, goos string) []string {
+	switch goos {
+	case "windows":
 		return []string{
 			filepath.Join(home, "Documents", "GitHub"),
+			filepath.Join(home, "Documents", "github"),
 			filepath.Join(home, "source", "repos"),
 			filepath.Join(home, "GitHub"),
 		}
-	}
-
-	return []string{
-		filepath.Join(home, "Documents", "github"),
-		filepath.Join(home, "Documents", "GitHub"),
-		filepath.Join(home, "github"),
-		filepath.Join(home, "GitHub"),
+	case "darwin":
+		return []string{
+			filepath.Join(home, "Developer"),
+			filepath.Join(home, "Code"),
+			filepath.Join(home, "Documents", "github"),
+			filepath.Join(home, "Documents", "GitHub"),
+			filepath.Join(home, "github"),
+			filepath.Join(home, "GitHub"),
+			filepath.Join(home, "src"),
+		}
+	default:
+		return []string{
+			filepath.Join(home, "Documents", "github"),
+			filepath.Join(home, "Documents", "GitHub"),
+			filepath.Join(home, "github"),
+			filepath.Join(home, "GitHub"),
+			filepath.Join(home, "code"),
+			filepath.Join(home, "Code"),
+			filepath.Join(home, "src"),
+		}
 	}
 }
 

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"path/filepath"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -151,5 +152,66 @@ func configStub() config.Config {
 	return config.Config{
 		RootPath:           "/tmp",
 		AutoRefreshSeconds: 30,
+	}
+}
+
+func TestRootPathCandidatesForGOOS(t *testing.T) {
+	home := filepath.Join(string(filepath.Separator), "home", "rei")
+
+	tests := []struct {
+		name string
+		goos string
+		want []string
+	}{
+		{
+			name: "windows",
+			goos: "windows",
+			want: []string{
+				filepath.Join(home, "Documents", "GitHub"),
+				filepath.Join(home, "Documents", "github"),
+				filepath.Join(home, "source", "repos"),
+				filepath.Join(home, "GitHub"),
+			},
+		},
+		{
+			name: "darwin",
+			goos: "darwin",
+			want: []string{
+				filepath.Join(home, "Developer"),
+				filepath.Join(home, "Code"),
+				filepath.Join(home, "Documents", "github"),
+				filepath.Join(home, "Documents", "GitHub"),
+				filepath.Join(home, "github"),
+				filepath.Join(home, "GitHub"),
+				filepath.Join(home, "src"),
+			},
+		},
+		{
+			name: "linux",
+			goos: "linux",
+			want: []string{
+				filepath.Join(home, "Documents", "github"),
+				filepath.Join(home, "Documents", "GitHub"),
+				filepath.Join(home, "github"),
+				filepath.Join(home, "GitHub"),
+				filepath.Join(home, "code"),
+				filepath.Join(home, "Code"),
+				filepath.Join(home, "src"),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := rootPathCandidatesForGOOS(home, tt.goos)
+			if len(got) != len(tt.want) {
+				t.Fatalf("expected %d candidates, got %d", len(tt.want), len(got))
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Fatalf("candidate %d mismatch: expected %q, got %q", i, tt.want[i], got[i])
+				}
+			}
+		})
 	}
 }
