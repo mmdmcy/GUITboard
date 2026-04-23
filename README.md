@@ -58,21 +58,35 @@ Then launch the binary for your platform:
 
 ## PortUI
 
-If you have the sibling `portui` repo checked out next to `GUITboard`, you can use the PortUI app in [`portui/`](./portui) to drive the common cross-platform development actions from one manifest.
+GUITboard vendors the PortUI runtime into this repo, so PortUI can act as the repo-local cross-platform TUI layer without needing a separate checkout.
 
 Linux or macOS:
 
 ```bash
-sh ../portui/portui.sh --manifest-dir ./portui
+sh ./portui.sh --list
+sh ./portui.sh --run test
 ```
 
 Windows:
 
 ```powershell
-..\portui\portui.ps1 -ManifestDir .\portui
+.\portui.ps1 -List
+.\portui.ps1 -Run test
 ```
 
-The bundled actions cover running the dashboard from source, running the Go test suite, and building a host binary into `dist/`.
+Command Prompt:
+
+```cmd
+portui.cmd --list
+```
+
+The bundled actions cover running the dashboard from source, running the Go test suite, and building a host binary into `dist/`. The action definitions live in [`portui/`](./portui), while the vendored runtime lives in [`.portui-runtime/`](./.portui-runtime).
+
+If you maintain both repos and want to refresh the vendored PortUI engine from the source `portui` repo:
+
+```bash
+sh ../portui/portui.sh --install-project .
+```
 
 ## How it works
 
@@ -94,3 +108,4 @@ The app remembers the last folder you picked in your user config directory, so i
 
 - Build artifacts like `GUITboard` and `GUITboard.exe` are ignored by Git.
 - User-specific app settings are stored outside the repository.
+- `portui.sh`, `portui.ps1`, `portui.cmd`, and `.portui-runtime/` are the vendored PortUI engine entrypoints for this repo.
