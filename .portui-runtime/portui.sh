@@ -5,6 +5,7 @@ set -u
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 DEFAULT_MANIFEST_DIR="$SCRIPT_DIR/examples/demo"
 DEFAULT_WORKSPACE_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+DEFAULT_SELF_MANIFEST_DIR="$SCRIPT_DIR/.portui"
 
 MANIFEST_DIR=""
 WORKSPACE_DIR=""
@@ -14,6 +15,7 @@ LIST_PROJECTS=0
 RUN_ACTION_ID=""
 PROJECT_ID=""
 INSTALL_PROJECT_DIR=""
+INIT_PROJECT_DIR=""
 
 PORTUI_OS=""
 PORTUI_VAR_KEYS=""
@@ -36,6 +38,7 @@ Options:
   --project ID         Project id inside workspace mode.
   --install-project DIR
                       Install or update project-local PortUI runtime files in a repo that already has portui/ or .portui.
+  --init-project DIR  Create a starter PortUI app in a repo, then install the project-local runtime.
   --list-projects      Print discovered workspace projects and exit.
   --list               Print actions for the selected manifest or project and exit.
   --run ACTION_ID      Run a specific action non-interactively.
@@ -130,6 +133,18 @@ detect_os() {
     esac
 }
 
+detect_local_manifest_dir() {
+    if [ -f "$DEFAULT_SELF_MANIFEST_DIR/manifest.env" ]; then
+        printf '%s\n' "$DEFAULT_SELF_MANIFEST_DIR"
+        return 0
+    fi
+    if [ -f "$SCRIPT_DIR/portui/manifest.env" ]; then
+        printf '%s\n' "$SCRIPT_DIR/portui"
+        return 0
+    fi
+    return 1
+}
+
 resolve_dir() {
     target=$1
     if [ ! -d "$target" ]; then
@@ -219,6 +234,67 @@ install_project_runtime() {
     printf '%s\n' "Installed PortUI runtime into $project_dir"
     printf '%s\n' "Manifest: $manifest_dir"
     printf '%s\n' "Run from the project root with ./portui.sh, .\\portui.ps1, or portui.cmd"
+}
+
+init_project_files() {
+    project_dir=$1
+    project_name=$(basename "$project_dir")
+    manifest_dir="$project_dir/portui"
+    actions_dir="$manifest_dir/actions"
+
+    if [ -f "$project_dir/portui/manifest.env" ] || [ -f "$project_dir/.portui/manifest.env" ]; then
+        printf '%s\n' "Project already has a PortUI app definition: $project_dir" >&2
+        exit 1
+    fi
+
+    mkdir -p "$actions_dir" || exit 1
+
+    cat > "$manifest_dir/manifest.env" <<EOF
+NAME=$project_name PortUI
+DESCRIPTION=Starter PortUI app for $project_name.
+VARIABLE_repo={{projectDir}}
+EOF
+
+    cat > "$actions_dir/01-doctor.env" <<'EOF'
+ID=doctor
+TITLE=Doctor
+DESCRIPTION=Print the current project, workspace, and OS values.
+TIMEOUT_SECONDS=20
+CWD={{projectDir}}
+POSIX_PROGRAM=sh
+POSIX_ARGS=-c|printf '%s\n' 'project={{projectId}}' 'workspace={{workspaceDir}}' 'os={{os}}'
+WINDOWS_PROGRAM=powershell
+WINDOWS_ARGS=-NoProfile|-Command|Write-Output 'project={{projectId}}'; Write-Output 'workspace={{workspaceDir}}'; Write-Output 'os={{os}}'
+EOF
+
+    cat > "$actions_dir/02-list-files.env" <<'EOF'
+ID=list-files
+TITLE=List Files
+DESCRIPTION=List the files in the project root.
+TIMEOUT_SECONDS=20
+CWD={{projectDir}}
+POSIX_PROGRAM=ls
+POSIX_ARGS=-la|.
+WINDOWS_PROGRAM=powershell
+WINDOWS_ARGS=-NoProfile|-Command|Get-ChildItem -Force .
+EOF
+
+    cat > "$actions_dir/03-git-status.env" <<'EOF'
+ID=git-status
+TITLE=Git Status
+DESCRIPTION=Show a compact git status when the project is a git repository.
+TIMEOUT_SECONDS=30
+CWD={{projectDir}}
+PROGRAM=git
+ARGS=status|--short|--branch
+EOF
+}
+
+init_project_runtime() {
+    project_dir=$(resolve_dir "$1")
+    init_project_files "$project_dir"
+    install_project_runtime "$project_dir"
+    printf '%s\n' "Created starter PortUI app in $project_dir/portui"
 }
 
 project_dir_from_manifest_dir() {
@@ -1031,6 +1107,13 @@ select_mode() {
         return
     fi
 
+    local_manifest_dir=$(detect_local_manifest_dir 2>/dev/null || true)
+    if [ -n "$local_manifest_dir" ]; then
+        MANIFEST_DIR=$(resolve_dir "$local_manifest_dir")
+        MODE="manifest"
+        return
+    fi
+
     WORKSPACE_DIR=$(resolve_dir "$DEFAULT_WORKSPACE_DIR")
     build_project_list
     discovered_projects=$(project_count)
@@ -1083,6 +1166,14 @@ while [ "$#" -gt 0 ]; do
             fi
             INSTALL_PROJECT_DIR=$1
             ;;
+        --init-project)
+            shift
+            if [ "$#" -eq 0 ]; then
+                printf '%s\n' "--init-project requires a value" >&2
+                exit 1
+            fi
+            INIT_PROJECT_DIR=$1
+            ;;
         --list-projects)
             LIST_PROJECTS=1
             ;;
@@ -1109,6 +1200,16 @@ while [ "$#" -gt 0 ]; do
     esac
     shift
 done
+
+if [ -n "$INIT_PROJECT_DIR" ]; then
+    if [ -n "$INSTALL_PROJECT_DIR" ] || [ -n "$MANIFEST_DIR" ] || [ -n "$WORKSPACE_DIR" ] || [ -n "$PROJECT_ID" ] || [ "$LIST_PROJECTS" -eq 1 ] || [ "$LIST_ONLY" -eq 1 ] || [ -n "$RUN_ACTION_ID" ]; then
+        printf '%s\n' "--init-project cannot be combined with other runtime selection or action flags" >&2
+        exit 1
+    fi
+
+    init_project_runtime "$INIT_PROJECT_DIR"
+    exit 0
+fi
 
 if [ -n "$INSTALL_PROJECT_DIR" ]; then
     if [ -n "$MANIFEST_DIR" ] || [ -n "$WORKSPACE_DIR" ] || [ -n "$PROJECT_ID" ] || [ "$LIST_PROJECTS" -eq 1 ] || [ "$LIST_ONLY" -eq 1 ] || [ -n "$RUN_ACTION_ID" ]; then

@@ -3,6 +3,7 @@ param(
     [string]$WorkspaceDir,
     [string]$Project,
     [string]$InstallProject,
+    [string]$InitProject,
     [switch]$ListProjects,
     [switch]$List,
     [string]$Run,
@@ -31,6 +32,7 @@ Options:
   -Project ID        Project id inside workspace mode.
   -InstallProject DIR
                     Install or update project-local PortUI runtime files in a repo that already has portui\ or .portui\.
+  -InitProject DIR   Create a starter PortUI app in a repo, then install the project-local runtime.
   -ListProjects      Print discovered workspace projects and exit.
   -List              Print actions for the selected manifest or project and exit.
   -Run ACTION_ID     Run a specific action non-interactively.
@@ -138,6 +140,19 @@ function Get-ResolvedDirectory {
     return (Resolve-Path -LiteralPath $Path).Path
 }
 
+function Get-LocalManifestDirectory {
+    foreach ($candidate in @(
+        (Join-Path $PSScriptRoot '.portui'),
+        (Join-Path $PSScriptRoot 'portui')
+    )) {
+        if (Test-Path -LiteralPath (Join-Path $candidate 'manifest.env')) {
+            return $candidate
+        }
+    }
+
+    return $null
+}
+
 function Get-ProjectManifestDirectoryInRepo {
     param(
         [string]$ResolvedProjectDir
@@ -189,23 +204,23 @@ function Install-PortUIProject {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'VERSION') -Destination (Join-Path $runtimeDir 'VERSION') -Force
     }
 
-    $shimSh = @"
+    $shimSh = (@'
 #!/bin/sh
 
 set -eu
 
-SCRIPT_DIR=\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)
-exec sh "\$SCRIPT_DIR/.portui-runtime/portui.sh" --manifest-dir "\$SCRIPT_DIR/$manifestLeaf" "\$@"
-"@
-    $shimPs1 = @"
-\$scriptDir = Split-Path -Parent \$MyInvocation.MyCommand.Path
-& (Join-Path \$scriptDir '.portui-runtime\portui.ps1') -ManifestDir (Join-Path \$scriptDir '$manifestLeaf') @args
-exit \$LASTEXITCODE
-"@
-    $shimCmd = @"
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec sh "$SCRIPT_DIR/.portui-runtime/portui.sh" --manifest-dir "$SCRIPT_DIR/{0}" "$@"
+'@) -f $manifestLeaf
+    $shimPs1 = (@'
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+& (Join-Path $scriptDir '.portui-runtime\portui.ps1') -ManifestDir (Join-Path $scriptDir '{0}') @args
+exit $LASTEXITCODE
+'@) -f $manifestLeaf
+    $shimCmd = (@'
 @echo off
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0\.portui-runtime\portui.ps1" -ManifestDir "%~dp0\$manifestLeaf" %*
-"@
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0\.portui-runtime\portui.ps1" -ManifestDir "%~dp0{0}" %*
+'@) -f $manifestLeaf
 
     Write-TextFileNoBom -Path (Join-Path $resolvedProjectDir 'portui.sh') -Content $shimSh
     Write-TextFileNoBom -Path (Join-Path $resolvedProjectDir 'portui.ps1') -Content $shimPs1
@@ -214,6 +229,76 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0\.portui-runtime\portu
     Write-Host "Installed PortUI runtime into $resolvedProjectDir"
     Write-Host "Manifest: $manifestDir"
     Write-Host 'Run from the project root with ./portui.sh, .\portui.ps1, or portui.cmd'
+}
+
+function Initialize-PortUIProjectFiles {
+    param(
+        [string]$ResolvedProjectDir
+    )
+
+    $projectName = Split-Path -Leaf $ResolvedProjectDir
+    $manifestDir = Join-Path $ResolvedProjectDir 'portui'
+    $actionsDir = Join-Path $manifestDir 'actions'
+
+    if (
+        (Test-Path -LiteralPath (Join-Path $ResolvedProjectDir 'portui\manifest.env')) -or
+        (Test-Path -LiteralPath (Join-Path $ResolvedProjectDir '.portui\manifest.env'))
+    ) {
+        throw "Project already has a PortUI app definition: $ResolvedProjectDir"
+    }
+
+    New-Item -ItemType Directory -Path $actionsDir -Force | Out-Null
+
+    Write-TextFileNoBom -Path (Join-Path $manifestDir 'manifest.env') -Content @"
+NAME=$projectName PortUI
+DESCRIPTION=Starter PortUI app for $projectName.
+VARIABLE_repo={{projectDir}}
+"@
+
+    Write-TextFileNoBom -Path (Join-Path $actionsDir '01-doctor.env') -Content @"
+ID=doctor
+TITLE=Doctor
+DESCRIPTION=Print the current project, workspace, and OS values.
+TIMEOUT_SECONDS=20
+CWD={{projectDir}}
+POSIX_PROGRAM=sh
+POSIX_ARGS=-c|printf '%s\n' 'project={{projectId}}' 'workspace={{workspaceDir}}' 'os={{os}}'
+WINDOWS_PROGRAM=powershell
+WINDOWS_ARGS=-NoProfile|-Command|Write-Output 'project={{projectId}}'; Write-Output 'workspace={{workspaceDir}}'; Write-Output 'os={{os}}'
+"@
+
+    Write-TextFileNoBom -Path (Join-Path $actionsDir '02-list-files.env') -Content @"
+ID=list-files
+TITLE=List Files
+DESCRIPTION=List the files in the project root.
+TIMEOUT_SECONDS=20
+CWD={{projectDir}}
+POSIX_PROGRAM=ls
+POSIX_ARGS=-la|.
+WINDOWS_PROGRAM=powershell
+WINDOWS_ARGS=-NoProfile|-Command|Get-ChildItem -Force .
+"@
+
+    Write-TextFileNoBom -Path (Join-Path $actionsDir '03-git-status.env') -Content @"
+ID=git-status
+TITLE=Git Status
+DESCRIPTION=Show a compact git status when the project is a git repository.
+TIMEOUT_SECONDS=30
+CWD={{projectDir}}
+PROGRAM=git
+ARGS=status|--short|--branch
+"@
+}
+
+function Initialize-AndInstallPortUIProject {
+    param(
+        [string]$ProjectDir
+    )
+
+    $resolvedProjectDir = Get-ResolvedDirectory -Path $ProjectDir
+    Initialize-PortUIProjectFiles -ResolvedProjectDir $resolvedProjectDir
+    Install-PortUIProject -ProjectDir $resolvedProjectDir
+    Write-Host "Created starter PortUI app in $resolvedProjectDir\portui"
 }
 
 function Get-ProjectDirectoryFromManifestDir {
@@ -872,6 +957,23 @@ if ($Help) {
     exit 0
 }
 
+if (-not [string]::IsNullOrWhiteSpace($InitProject)) {
+    if (
+        -not [string]::IsNullOrWhiteSpace($InstallProject) -or
+        -not [string]::IsNullOrWhiteSpace($ManifestDir) -or
+        -not [string]::IsNullOrWhiteSpace($WorkspaceDir) -or
+        -not [string]::IsNullOrWhiteSpace($Project) -or
+        $ListProjects -or
+        $List -or
+        -not [string]::IsNullOrWhiteSpace($Run)
+    ) {
+        throw '-InitProject cannot be combined with other runtime selection or action flags.'
+    }
+
+    Initialize-AndInstallPortUIProject -ProjectDir $InitProject
+    exit 0
+}
+
 if (-not [string]::IsNullOrWhiteSpace($InstallProject)) {
     if (
         -not [string]::IsNullOrWhiteSpace($ManifestDir) -or
@@ -909,6 +1011,10 @@ if (-not [string]::IsNullOrWhiteSpace($ManifestDir)) {
     $projects = @(Get-ProjectManifestDirs -ResolvedWorkspaceDir $WorkspaceDir)
     $mode = 'workspace'
 } else {
+    if ($localManifestDir = Get-LocalManifestDirectory) {
+        $ManifestDir = Get-ResolvedDirectory -Path $localManifestDir
+        $mode = 'manifest'
+    } else {
     $WorkspaceDir = $defaultWorkspaceDir
     $projects = @(Get-ProjectManifestDirs -ResolvedWorkspaceDir $WorkspaceDir)
     if ($projects.Count -gt 0) {
@@ -918,6 +1024,7 @@ if (-not [string]::IsNullOrWhiteSpace($ManifestDir)) {
     } else {
         $ManifestDir = Get-ResolvedDirectory -Path $defaultManifestDir
         $mode = 'manifest'
+    }
     }
 }
 
