@@ -28,6 +28,39 @@ GUITboard is a local-only cross-platform terminal dashboard (TUI) for managing a
 
 ## Quick Start
 
+GUITboard's PortUI action runs the app from source, so install Go once before launching it.
+
+macOS with Homebrew:
+
+```bash
+brew install go
+go version
+```
+
+Windows PowerShell with WinGet:
+
+```powershell
+winget install -e --id GoLang.Go
+go version
+```
+
+Linux package manager examples:
+
+```bash
+# Debian or Ubuntu
+sudo apt update && sudo apt install -y golang-go
+
+# Fedora
+sudo dnf install -y golang
+
+# Arch
+sudo pacman -S go
+```
+
+Linux distro packages can lag. If `go version` reports less than Go 1.25, use the official installer from [go.dev/doc/install](https://go.dev/doc/install/).
+
+Then launch GUITboard from the repository root.
+
 Linux or macOS:
 
 ```bash
@@ -50,6 +83,13 @@ Direct Go entrypoint:
 
 ```bash
 go run ./cmd/guitboard
+```
+
+If Homebrew says Go is installed but your Mac still reports `go: command not found`, refresh Homebrew's shell path:
+
+```bash
+eval "$(/opt/homebrew/bin/brew shellenv)"
+echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
 ```
 
 ## Optional Local Build
