@@ -29,6 +29,9 @@ CURRENT_PROJECT_ID=""
 CURRENT_WORKSPACE_DIR=""
 PORTUI_SCREEN_ACTIVE=0
 PORTUI_RAW_STTY=""
+PORTUI_CR=$(printf '\r')
+PORTUI_REPLACED_TEXT=""
+PORTUI_EXPANDED_TEXT=""
 
 usage() {
     cat <<'EOF'
@@ -52,7 +55,54 @@ EOF
 }
 
 quote_single() {
-    printf "%s" "$1" | sed "s/'/'\\\\''/g"
+    value=$1
+    case "$value" in
+        *"'"*) ;;
+        *)
+            printf "%s" "$value"
+            return
+            ;;
+    esac
+
+    output=
+    rest=$value
+    while :; do
+        case "$rest" in
+            *"'"*)
+                prefix=${rest%%"'"*}
+                output=$output$prefix"'\\''"
+                rest=${rest#*"'"}
+                ;;
+            *)
+                output=$output$rest
+                break
+                ;;
+        esac
+    done
+
+    printf "%s" "$output"
+}
+
+path_basename() {
+    path=${1%/}
+    printf '%s\n' "${path##*/}"
+}
+
+path_dirname() {
+    path=${1%/}
+    case "$path" in
+        */*)
+            dir=${path%/*}
+            if [ -n "$dir" ]; then
+                printf '%s\n' "$dir"
+            else
+                printf '%s\n' "/"
+            fi
+            ;;
+        *)
+            printf '%s\n' "."
+            ;;
+    esac
 }
 
 set_named_var() {
@@ -64,7 +114,10 @@ set_named_var() {
             ;;
     esac
 
-    escaped=$(quote_single "$value")
+    case "$value" in
+        *"'"*) escaped=$(quote_single "$value") ;;
+        *) escaped=$value ;;
+    esac
     eval "PORTUI_VAR_$key='$escaped'"
 
     case " $PORTUI_VAR_KEYS " in
@@ -85,11 +138,36 @@ get_named_var() {
     eval "printf '%s' \"\${PORTUI_VAR_$key-}\""
 }
 
-escape_sed_replacement() {
-    printf "%s" "$1" | sed 's/[&|]/\\&/g'
+replace_token_into() {
+    input=$1
+    token=$2
+    replacement=$3
+    output=
+    rest=$input
+
+    while :; do
+        case "$rest" in
+            *"$token"*)
+                prefix=${rest%%"$token"*}
+                output=$output$prefix$replacement
+                rest=${rest#*"$token"}
+                ;;
+            *)
+                output=$output$rest
+                break
+                ;;
+        esac
+    done
+
+    PORTUI_REPLACED_TEXT=$output
 }
 
-expand_text() {
+replace_token() {
+    replace_token_into "$1" "$2" "$3"
+    printf "%s" "$PORTUI_REPLACED_TEXT"
+}
+
+expand_text_into() {
     text=$1
     pass=0
 
@@ -97,9 +175,9 @@ expand_text() {
         changed=0
         for key in $PORTUI_VAR_KEYS; do
             token="{{$key}}"
-            value=$(get_named_var "$key")
-            safe_value=$(escape_sed_replacement "$value")
-            updated=$(printf "%s" "$text" | sed "s|$token|$safe_value|g")
+            eval "value=\${PORTUI_VAR_$key-}"
+            replace_token_into "$text" "$token" "$value"
+            updated=$PORTUI_REPLACED_TEXT
             if [ "$updated" != "$text" ]; then
                 changed=1
                 text=$updated
@@ -113,7 +191,12 @@ expand_text() {
         pass=$((pass + 1))
     done
 
-    printf "%s" "$text"
+    PORTUI_EXPANDED_TEXT=$text
+}
+
+expand_text() {
+    expand_text_into "$1"
+    printf "%s" "$PORTUI_EXPANDED_TEXT"
 }
 
 append_pipe_value() {
@@ -130,9 +213,8 @@ append_pipe_value() {
 }
 
 is_truthy() {
-    value=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
-    case "$value" in
-        1|true|yes|on) return 0 ;;
+    case "$1" in
+        1|true|TRUE|True|yes|YES|Yes|on|ON|On) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -227,7 +309,7 @@ detect_project_manifest_dir_in_repo() {
 install_project_runtime() {
     project_dir=$(resolve_dir "$1")
     manifest_dir=$(detect_project_manifest_dir_in_repo "$project_dir")
-    manifest_leaf=$(basename "$manifest_dir")
+    manifest_leaf=$(path_basename "$manifest_dir")
     runtime_dir="$project_dir/.portui-runtime"
 
     mkdir -p "$runtime_dir" || exit 1
@@ -251,7 +333,7 @@ install_project_runtime() {
 
 init_project_files() {
     project_dir=$1
-    project_name=$(basename "$project_dir")
+    project_name=$(path_basename "$project_dir")
     manifest_dir="$project_dir/portui"
     actions_dir="$manifest_dir/actions"
 
@@ -312,10 +394,10 @@ init_project_runtime() {
 
 project_dir_from_manifest_dir() {
     manifest_dir=$1
-    manifest_base=$(basename "$manifest_dir")
+    manifest_base=$(path_basename "$manifest_dir")
     case "$manifest_base" in
         portui|.portui)
-            dirname "$manifest_dir"
+            path_dirname "$manifest_dir"
             ;;
         *)
             printf '%s\n' "$manifest_dir"
@@ -325,7 +407,7 @@ project_dir_from_manifest_dir() {
 
 project_id_from_manifest_dir() {
     project_dir=$(project_dir_from_manifest_dir "$1")
-    basename "$project_dir"
+    path_basename "$project_dir"
 }
 
 read_manifest_summary() {
@@ -339,7 +421,7 @@ read_manifest_summary() {
     fi
 
     while IFS= read -r raw_line || [ -n "$raw_line" ]; do
-        line=$(printf "%s" "$raw_line" | tr -d '\r')
+        line=${raw_line%"$PORTUI_CR"}
         case "$line" in
             ''|'#'*)
                 continue
@@ -372,7 +454,7 @@ init_builtin_variables() {
     if [ -n "$CURRENT_WORKSPACE_DIR" ]; then
         workspace_dir_value=$CURRENT_WORKSPACE_DIR
     else
-        workspace_dir_value=$(dirname "$current_project_dir")
+        workspace_dir_value=$(path_dirname "$current_project_dir")
     fi
 
     CURRENT_PROJECT_DIR=$current_project_dir
@@ -432,14 +514,14 @@ load_manifest() {
     PORTUI_MANIFEST_DESCRIPTION=""
 
     while IFS= read -r raw_line || [ -n "$raw_line" ]; do
-        line=$(printf "%s" "$raw_line" | tr -d '\r')
+        line=${raw_line%"$PORTUI_CR"}
         parse_manifest_line "$line"
     done < "$manifest_file"
 
     for key in $PORTUI_VAR_KEYS; do
-        value=$(get_named_var "$key")
-        expanded=$(expand_text "$value")
-        set_named_var "$key" "$expanded" || exit 1
+        eval "value=\${PORTUI_VAR_$key-}"
+        expand_text_into "$value"
+        set_named_var "$key" "$PORTUI_EXPANDED_TEXT" || exit 1
     done
 }
 
@@ -587,7 +669,7 @@ load_action() {
     reset_action_state
 
     while IFS= read -r raw_line || [ -n "$raw_line" ]; do
-        line=$(printf "%s" "$raw_line" | tr -d '\r')
+        line=${raw_line%"$PORTUI_CR"}
         parse_action_line "$line"
     done < "$action_file"
 
