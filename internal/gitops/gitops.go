@@ -66,21 +66,26 @@ func Discover(root string) ([]string, error) {
 			continue
 		}
 
+		foundRepo := false
 		for _, entry := range entries {
 			if entry.Name() == ".git" {
 				if _, ok := seen[dir]; !ok {
 					repos = append(repos, dir)
 					seen[dir] = struct{}{}
 				}
+				foundRepo = true
 				break
 			}
+		}
+		if foundRepo {
+			continue
 		}
 
 		for _, entry := range entries {
 			if !entry.IsDir() {
 				continue
 			}
-			if entry.Name() == ".git" {
+			if shouldSkipDiscoveryDir(entry.Name()) {
 				continue
 			}
 			if entry.Type()&os.ModeSymlink != 0 {
@@ -157,7 +162,7 @@ func Inspect(repoPath string) Repo {
 		Path: repoPath,
 	}
 
-	statusOutput, err := RunGit(repoPath, "status", "--porcelain=v1", "--branch", "--untracked-files=all")
+	statusOutput, err := RunGit(repoPath, "status", "--porcelain=v1", "--branch", "--untracked-files=normal")
 	if err != nil {
 		repo.LastError = trimOutput(err.Error())
 		return repo
@@ -199,6 +204,15 @@ func Inspect(repoPath string) Repo {
 	}
 
 	return repo
+}
+
+func shouldSkipDiscoveryDir(name string) bool {
+	switch name {
+	case ".git", "node_modules", "vendor", "dist", "build", ".next", ".nuxt", ".cache", "target":
+		return true
+	default:
+		return false
+	}
 }
 
 func StageAll(repoPath string) (string, error) {

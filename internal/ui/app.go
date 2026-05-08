@@ -131,10 +131,19 @@ func Run() error {
 	}
 
 	model := newDashboardModel(cfg)
-	program := tea.NewProgram(model, tea.WithAltScreen())
+	var program *tea.Program
+	if shouldUseAltScreen() {
+		program = tea.NewProgram(model, tea.WithAltScreen())
+	} else {
+		program = tea.NewProgram(model)
+	}
 
 	_, err = program.Run()
 	return err
+}
+
+func shouldUseAltScreen() bool {
+	return strings.TrimSpace(os.Getenv("PORTUI_INTERACTIVE")) == ""
 }
 
 func newDashboardModel(cfg config.Config) dashboardModel {
@@ -1880,6 +1889,10 @@ func ensureRootPath(raw string) (string, error) {
 }
 
 func defaultRootPath() string {
+	if root := defaultRootFromCurrentRepo(); root != "" {
+		return root
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
@@ -1897,6 +1910,35 @@ func defaultRootPath() string {
 	}
 
 	return candidates[0]
+}
+
+func defaultRootFromCurrentRepo() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+
+	dir = filepath.Clean(dir)
+	for {
+		if hasGitMarker(dir) {
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				return ""
+			}
+			return parent
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+func hasGitMarker(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil
 }
 
 func rootPathCandidates(home string) []string {

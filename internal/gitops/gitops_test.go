@@ -62,6 +62,26 @@ func TestScanSortsByLatestDirtyActivity(t *testing.T) {
 	}
 }
 
+func TestDiscoverTreatsRepositoriesAsScanBoundaries(t *testing.T) {
+	root := t.TempDir()
+	outerRepo := createRepoAt(t, filepath.Join(root, "outer"))
+	nestedGitDir := filepath.Join(outerRepo, "node_modules", "dependency", ".git")
+	if err := os.MkdirAll(nestedGitDir, 0o755); err != nil {
+		t.Fatalf("failed to create nested git marker: %v", err)
+	}
+
+	paths, err := Discover(root)
+	if err != nil {
+		t.Fatalf("Discover returned error: %v", err)
+	}
+	if len(paths) != 1 {
+		t.Fatalf("expected only the outer repo to be discovered, got %v", paths)
+	}
+	if paths[0] != outerRepo {
+		t.Fatalf("expected %s, got %s", outerRepo, paths[0])
+	}
+}
+
 func TestInspectTracksChangedFiles(t *testing.T) {
 	repoPath := createTestRepo(t, "changed-files")
 	writeFile(t, filepath.Join(repoPath, "first.txt"), "first")
@@ -79,6 +99,23 @@ func TestInspectTracksChangedFiles(t *testing.T) {
 	}
 	if repo.ChangedFiles[0] != "second.txt" && repo.ChangedFiles[1] != "second.txt" {
 		t.Fatalf("expected changed files to include second.txt, got %v", repo.ChangedFiles)
+	}
+}
+
+func TestInspectCollapsesUntrackedDirectories(t *testing.T) {
+	repoPath := createTestRepo(t, "untracked-directory")
+	writeFile(t, filepath.Join(repoPath, "large-untracked", "first.txt"), "first")
+	writeFile(t, filepath.Join(repoPath, "large-untracked", "nested", "second.txt"), "second")
+
+	repo := Inspect(repoPath)
+	if !repo.Dirty {
+		t.Fatal("expected repo to be dirty")
+	}
+	if len(repo.ChangedFiles) != 1 {
+		t.Fatalf("expected the untracked directory to be summarized once, got %v", repo.ChangedFiles)
+	}
+	if strings.TrimRight(repo.ChangedFiles[0], string(os.PathSeparator)) != "large-untracked" {
+		t.Fatalf("expected untracked directory summary, got %v", repo.ChangedFiles)
 	}
 }
 

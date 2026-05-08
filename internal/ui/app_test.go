@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -152,6 +153,32 @@ func configStub() config.Config {
 	return config.Config{
 		RootPath:           "/tmp",
 		AutoRefreshSeconds: 30,
+	}
+}
+
+func TestShouldUseAltScreenDisablesPortUILaunch(t *testing.T) {
+	t.Setenv("PORTUI_INTERACTIVE", "1")
+
+	if shouldUseAltScreen() {
+		t.Fatal("expected PortUI launches to render in the current terminal screen")
+	}
+}
+
+func TestDefaultRootFromCurrentRepoUsesParentFolder(t *testing.T) {
+	root := t.TempDir()
+	repoPath := filepath.Join(root, "GUITboard")
+	nestedPath := filepath.Join(repoPath, "portui")
+	if err := os.MkdirAll(filepath.Join(repoPath, ".git"), 0o755); err != nil {
+		t.Fatalf("failed to create git marker: %v", err)
+	}
+	if err := os.MkdirAll(nestedPath, 0o755); err != nil {
+		t.Fatalf("failed to create nested working dir: %v", err)
+	}
+
+	t.Chdir(nestedPath)
+
+	if got := defaultRootFromCurrentRepo(); got != filepath.Clean(root) {
+		t.Fatalf("expected %s, got %s", filepath.Clean(root), got)
 	}
 }
 
