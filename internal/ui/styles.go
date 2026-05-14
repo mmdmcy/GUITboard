@@ -42,6 +42,10 @@ type uiStyles struct {
 var styles = newUIStyles()
 
 func newUIStyles() uiStyles {
+	if plainTerminalMode() {
+		return newPlainUIStyles()
+	}
+
 	panelBorder := lipgloss.AdaptiveColor{Light: "#A7B5C7", Dark: "#38536B"}
 	panelFill := lipgloss.AdaptiveColor{Light: "#F6F9FC", Dark: "#10202D"}
 	textColor := lipgloss.AdaptiveColor{Light: "#102A43", Dark: "#E6EEF7"}
@@ -192,5 +196,98 @@ func newUIStyles() uiStyles {
 			Foreground(mutedColor),
 		spinner: lipgloss.NewStyle().
 			Foreground(accent),
+	}
+}
+
+func newPlainUIStyles() uiStyles {
+	return uiStyles{
+		title: lipgloss.NewStyle().
+			Bold(true),
+		headerDivider: lipgloss.NewStyle().
+			PaddingLeft(1),
+		headerText: lipgloss.NewStyle(),
+		panel: lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			Padding(0, 1).
+			MarginBottom(1),
+		panelActive: lipgloss.NewStyle().
+			Border(lipgloss.DoubleBorder()).
+			Padding(0, 1).
+			MarginBottom(1),
+		panelTitle: lipgloss.NewStyle().
+			Bold(true).
+			MarginBottom(1),
+		panelTitleActive: lipgloss.NewStyle().
+			Bold(true).
+			Reverse(true).
+			Padding(0, 1).
+			MarginBottom(1),
+		statCard: lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			Padding(0, 1).
+			MarginRight(1),
+		statLabel: lipgloss.NewStyle(),
+		statValue: lipgloss.NewStyle().
+			Bold(true),
+		actionButton: lipgloss.NewStyle().
+			Padding(0, 1),
+		actionSelected: lipgloss.NewStyle().
+			Underline(true).
+			Padding(0, 1),
+		actionActive: lipgloss.NewStyle().
+			Bold(true).
+			Reverse(true).
+			Padding(0, 1),
+		actionDisabled: lipgloss.NewStyle().
+			Padding(0, 1),
+		repoRow: lipgloss.NewStyle().
+			Padding(0, 1).
+			MarginBottom(1),
+		repoSelected: lipgloss.NewStyle().
+			Bold(true).
+			BorderStyle(lipgloss.ThickBorder()).
+			BorderLeft(true).
+			BorderTop(false).
+			BorderRight(false).
+			BorderBottom(false).
+			Padding(0, 1).
+			MarginBottom(1),
+		repoTitle: lipgloss.NewStyle().
+			Bold(true).
+			MarginBottom(1),
+		mutedText: lipgloss.NewStyle(),
+		sectionInfo: lipgloss.NewStyle().
+			MarginBottom(1),
+		emptyState: lipgloss.NewStyle().
+			Italic(true),
+		detailLabel: lipgloss.NewStyle().
+			Bold(true),
+		detailValue: lipgloss.NewStyle(),
+		badgeDirty: lipgloss.NewStyle().
+			Padding(0, 1),
+		badgeClean: lipgloss.NewStyle().
+			Padding(0, 1),
+		badgeAhead: lipgloss.NewStyle().
+			Padding(0, 1),
+		badgeBehind: lipgloss.NewStyle().
+			Padding(0, 1),
+		badgeBusy: lipgloss.NewStyle().
+			Bold(true).
+			Reverse(true).
+			Padding(0, 1),
+		badgeMuted: lipgloss.NewStyle().
+			Padding(0, 1),
+		modalBox: lipgloss.NewStyle().
+			Border(lipgloss.DoubleBorder()).
+			Padding(1, 2),
+		modalTitle: lipgloss.NewStyle().
+			Bold(true).
+			MarginBottom(1),
+		modalText: lipgloss.NewStyle().
+			MarginBottom(1),
+		modalInput: lipgloss.NewStyle().
+			MarginBottom(1),
+		help:    lipgloss.NewStyle(),
+		spinner: lipgloss.NewStyle(),
 	}
 }

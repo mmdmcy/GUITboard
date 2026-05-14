@@ -164,6 +164,22 @@ func TestShouldUseAltScreenDisablesPortUILaunch(t *testing.T) {
 	}
 }
 
+func TestShouldUseAltScreenDisablesDirectWindowsLauncher(t *testing.T) {
+	t.Setenv("GUITBOARD_NO_ALT_SCREEN", "1")
+
+	if shouldUseAltScreen() {
+		t.Fatal("expected direct Windows launcher to render in the current terminal screen")
+	}
+}
+
+func TestPlainTerminalModeSupportsDirectWindowsLauncher(t *testing.T) {
+	t.Setenv("GUITBOARD_PLAIN_TERMINAL", "1")
+
+	if !plainTerminalMode() {
+		t.Fatal("expected direct Windows launcher to use plain terminal styling")
+	}
+}
+
 func TestDefaultRootFromCurrentRepoUsesParentFolder(t *testing.T) {
 	root := t.TempDir()
 	repoPath := filepath.Join(root, "GUITboard")

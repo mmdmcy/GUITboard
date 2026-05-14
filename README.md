@@ -61,29 +61,11 @@ Linux distro packages can lag. If `go version` reports less than Go 1.25, use th
 
 Then launch GUITboard from the repository root.
 
-Linux or macOS:
-
-```bash
-sh ./portui.sh --run run-dashboard
-```
-
-Windows PowerShell:
-
-```powershell
-.\portui.ps1 -Run run-dashboard
-```
-
-Command Prompt:
-
-```cmd
-portui.cmd --run run-dashboard
-```
-
-Direct Go entrypoint:
-
-```bash
-go run ./cmd/guitboard
-```
+| OS | What to run |
+| --- | --- |
+| Windows 10/11 | Double-click `GUITboard.cmd` |
+| macOS or Linux | `sh ./portui.sh --run run-dashboard` |
+| Any OS, from source | `go run ./cmd/guitboard` |
 
 If Homebrew says Go is installed but your Mac still reports `go: command not found`, refresh Homebrew's shell path:
 
@@ -126,27 +108,13 @@ Then launch that local binary for your platform:
 
 GUITboard vendors the PortUI runtime into this repo, so PortUI acts as the repo-local launcher layer for this TUI without needing a separate checkout.
 
-Linux or macOS:
+Most people only need the launch commands above. Use PortUI for maintenance actions:
 
-```bash
-sh ./portui.sh --list
-sh ./portui.sh --run run-dashboard
-sh ./portui.sh --run test
-```
-
-Windows PowerShell:
-
-```powershell
-.\portui.ps1 -List
-.\portui.ps1 -Run run-dashboard
-.\portui.ps1 -Run test
-```
-
-Command Prompt:
-
-```cmd
-portui.cmd --list
-```
+| OS | List actions | Run tests |
+| --- | --- | --- |
+| Windows PowerShell | `.\portui.ps1 -List` | `.\portui.ps1 -Run test` |
+| Windows Command Prompt | `portui.cmd --list` | `portui.cmd --run test` |
+| macOS or Linux | `sh ./portui.sh --list` | `sh ./portui.sh --run test` |
 
 The bundled actions cover running the dashboard from source, running the Go test suite, and optionally building a local binary into `dist/`. The action definitions live in [`portui/`](./portui), while the vendored runtime lives in [`.portui-runtime/`](./.portui-runtime).
 
@@ -176,4 +144,5 @@ The app remembers the last folder you picked in your user config directory, so i
 
 - Local build artifacts like `guitboard`, `GUITboard`, `dist/`, and `*.exe` are ignored by Git.
 - User-specific app settings are stored outside the repository.
+- `GUITboard.cmd` is the direct Windows launcher.
 - `portui.sh`, `portui.ps1`, `portui.cmd`, and `.portui-runtime/` are the vendored PortUI engine entrypoints for this repo.

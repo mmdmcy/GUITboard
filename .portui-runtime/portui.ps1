@@ -755,26 +755,9 @@ function Invoke-ResolvedAction {
                 $exitCode = 127
             } else {
                 $resolvedArgs = @(Split-Args $Resolved.Args)
-                if ((Get-HostOSName) -eq 'windows') {
-                    $startInfo = @{
-                        FilePath = $Resolved.Program
-                        Wait = $true
-                        PassThru = $true
-                        NoNewWindow = $true
-                    }
-                    if ($resolvedArgs.Count -gt 0) {
-                        $startInfo.ArgumentList = (Build-ArgumentString -ArgList $resolvedArgs)
-                    }
-
-                    $process = Start-Process @startInfo
-                    if ($null -ne $process.ExitCode) {
-                        $exitCode = $process.ExitCode
-                    }
-                } else {
-                    & $Resolved.Program @resolvedArgs
-                    if ($null -ne $LASTEXITCODE) {
-                        $exitCode = $LASTEXITCODE
-                    }
+                & $Resolved.Program @resolvedArgs
+                if ($null -ne $LASTEXITCODE) {
+                    $exitCode = $LASTEXITCODE
                 }
             }
         } catch {

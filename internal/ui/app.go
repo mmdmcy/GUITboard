@@ -115,16 +115,24 @@ type operationFinishedMsg struct {
 
 type refreshTickMsg time.Time
 
+var loggedInitialView bool
+
 func Run() error {
+	startupLog("Run: start")
+
 	cfg, err := config.Load()
 	if err != nil {
+		startupLog("Run: config load failed: %v", err)
 		cfg = config.Default()
 	}
+	startupLog("Run: config root=%q", cfg.RootPath)
 
 	root, err := ensureRootPath(cfg.RootPath)
 	if err != nil {
+		startupLog("Run: root failed: %v", err)
 		return err
 	}
+	startupLog("Run: root=%q", root)
 	if root != cfg.RootPath {
 		cfg.RootPath = root
 		_ = config.Save(cfg)
@@ -132,18 +140,47 @@ func Run() error {
 
 	model := newDashboardModel(cfg)
 	var program *tea.Program
+	startupLog("Run: creating program alt=%t plain=%t", shouldUseAltScreen(), plainTerminalMode())
 	if shouldUseAltScreen() {
 		program = tea.NewProgram(model, tea.WithAltScreen())
 	} else {
 		program = tea.NewProgram(model)
 	}
 
+	startupLog("Run: before program.Run")
 	_, err = program.Run()
+	startupLog("Run: program.Run returned err=%v", err)
 	return err
 }
 
 func shouldUseAltScreen() bool {
-	return strings.TrimSpace(os.Getenv("PORTUI_INTERACTIVE")) == ""
+	return strings.TrimSpace(os.Getenv("PORTUI_INTERACTIVE")) == "" &&
+		strings.TrimSpace(os.Getenv("GUITBOARD_NO_ALT_SCREEN")) == ""
+}
+
+func plainTerminalMode() bool {
+	return strings.TrimSpace(os.Getenv("GUITBOARD_PLAIN_TERMINAL")) != "" ||
+		strings.TrimSpace(os.Getenv("NO_COLOR")) != ""
+}
+
+func startupLog(format string, args ...any) {
+	path := strings.TrimSpace(os.Getenv("GUITBOARD_STARTUP_LOG"))
+	if path == "" {
+		return
+	}
+
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		_ = os.MkdirAll(dir, 0o755)
+	}
+
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+
+	message := fmt.Sprintf(format, args...)
+	_, _ = fmt.Fprintf(file, "%s %s\n", time.Now().Format(time.RFC3339Nano), message)
 }
 
 func newDashboardModel(cfg config.Config) dashboardModel {
@@ -176,6 +213,7 @@ func newDashboardModel(cfg config.Config) dashboardModel {
 }
 
 func (m dashboardModel) Init() tea.Cmd {
+	startupLog("Init: busy=%t root=%q", m.busy, m.cfg.RootPath)
 	cmds := []tea.Cmd{refreshTickCmd(m.autoRefreshInterval())}
 	if m.busy && strings.TrimSpace(m.cfg.RootPath) != "" {
 		cmds = append(cmds, m.spinner.Tick, scanReposCmd(m.cfg.RootPath))
@@ -887,7 +925,9 @@ func refreshTickCmd(interval time.Duration) tea.Cmd {
 func scanReposCmd(root string) tea.Cmd {
 	root = strings.TrimSpace(root)
 	return func() tea.Msg {
+		startupLog("Scan: start root=%q", root)
 		repos, err := gitops.Scan(root)
+		startupLog("Scan: done repos=%d err=%v", len(repos), err)
 		return scanFinishedMsg{repos: repos, err: err}
 	}
 }
@@ -1040,6 +1080,11 @@ func cloneRepoCmd(root, source string) tea.Cmd {
 }
 
 func (m dashboardModel) View() string {
+	if !loggedInitialView {
+		loggedInitialView = true
+		startupLog("View: first width=%d height=%d busy=%t", m.width, m.height, m.busy)
+	}
+
 	base := ""
 	if m.isCompactLayout() {
 		base = m.renderCompactView()
@@ -1205,6 +1250,9 @@ func (m dashboardModel) renderCompactRepoRow(repo gitops.Repo, selected bool, wi
 
 	switch {
 	case selected && m.focus == focusRepoList:
+		if plainTerminalMode() {
+			return lipgloss.NewStyle().Bold(true).Reverse(true).Width(width).Render(line)
+		}
 		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{Light: "#102A43", Dark: "#E6EEF7"}).Background(lipgloss.AdaptiveColor{Light: "#DCEEF8", Dark: "#143042"}).Width(width).Render(line)
 	case selected:
 		return lipgloss.NewStyle().Bold(true).Width(width).Render(line)
