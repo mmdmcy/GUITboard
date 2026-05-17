@@ -184,8 +184,12 @@ func TestSyncFetchesAndFastForwardsCleanRepo(t *testing.T) {
 	}
 
 	repo := Inspect(clonePath)
-	if _, err := Sync(repo); err != nil {
-		t.Fatalf("Sync returned error: %v", err)
+	result, err := SyncDetailed(repo)
+	if err != nil {
+		t.Fatalf("SyncDetailed returned error: %v", err)
+	}
+	if result.Status != SyncStatusUpdated {
+		t.Fatalf("expected SyncDetailed to report an update, got %q", result.Status)
 	}
 
 	updated := Inspect(clonePath)
@@ -194,6 +198,14 @@ func TestSyncFetchesAndFastForwardsCleanRepo(t *testing.T) {
 	}
 	if updated.Dirty {
 		t.Fatal("expected clone to stay clean after Sync")
+	}
+
+	result, err = SyncDetailed(updated)
+	if err != nil {
+		t.Fatalf("SyncDetailed returned error on current repo: %v", err)
+	}
+	if result.Status != SyncStatusCurrent {
+		t.Fatalf("expected SyncDetailed to report current repo, got %q", result.Status)
 	}
 }
 
@@ -211,12 +223,18 @@ func TestSyncSkipsFastForwardWhenRepoIsDirty(t *testing.T) {
 	writeFile(t, filepath.Join(clonePath, "local.txt"), "local change\n")
 
 	repo := Inspect(clonePath)
-	output, err := Sync(repo)
+	result, err := SyncDetailed(repo)
 	if err != nil {
 		t.Fatalf("expected Sync to fetch and skip fast-forward cleanly, got %v", err)
 	}
-	if !strings.Contains(output, "Skipped fast-forward") {
-		t.Fatalf("expected Sync output to explain the skip, got %q", output)
+	if result.Status != SyncStatusSkipped {
+		t.Fatalf("expected SyncDetailed to report skipped repo, got %q", result.Status)
+	}
+	if result.Reason != "the working tree has local changes" {
+		t.Fatalf("expected dirty skip reason, got %q", result.Reason)
+	}
+	if !strings.Contains(result.Output, "Skipped fast-forward") {
+		t.Fatalf("expected Sync output to explain the skip, got %q", result.Output)
 	}
 
 	updated := Inspect(clonePath)

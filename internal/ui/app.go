@@ -45,7 +45,7 @@ const (
 	globalActionFilter
 	globalActionDirtyOnly
 	globalActionClone
-	globalActionFetchAll
+	globalActionUpdateAll
 	globalActionBulkCommit
 )
 
@@ -329,6 +329,11 @@ func (m dashboardModel) updateDashboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.startRefresh("Refreshing repositories...")
+	case "u":
+		if m.busy {
+			return m, nil
+		}
+		return m.startUpdateAll()
 	case "left", "h":
 		m.moveLeft()
 		return m, nil
@@ -528,15 +533,8 @@ func (m dashboardModel) activateGlobalAction() (tea.Model, tea.Cmd) {
 		m.openModal(modalClone, "Clone Repository", "Paste a Git URL or use owner/repo shorthand. GUITboard will clone into the current root folder.", "", "owner/repo", gitops.Repo{})
 		return m, nil
 
-	case globalActionFetchAll:
-		if !m.hasSyncableRepos() {
-			m.status = "No repositories with a remote were found."
-			return m, nil
-		}
-		m.busy = true
-		m.busyLabel = "Fetching and fast-forwarding repositories where possible..."
-		m.status = m.busyLabel
-		return m, tea.Batch(m.spinner.Tick, fetchAllCmd(m.repos))
+	case globalActionUpdateAll:
+		return m.startUpdateAll()
 
 	case globalActionBulkCommit:
 		if !m.hasDirtyRepos() {
@@ -643,6 +641,18 @@ func (m dashboardModel) startRefresh(status string) (dashboardModel, tea.Cmd) {
 	m.busyLabel = status
 	m.status = status
 	return m, tea.Batch(m.spinner.Tick, scanReposCmd(m.cfg.RootPath))
+}
+
+func (m dashboardModel) startUpdateAll() (dashboardModel, tea.Cmd) {
+	if !m.hasSyncableRepos() {
+		m.status = "No repositories with a remote were found."
+		return m, nil
+	}
+
+	m.busy = true
+	m.busyLabel = "Updating repositories from their remotes..."
+	m.status = m.busyLabel
+	return m, tea.Batch(m.spinner.Tick, updateAllCmd(m.repos))
 }
 
 func (m *dashboardModel) openModal(kind modalKind, title, prompt, value, placeholder string, repo gitops.Repo) {
@@ -969,11 +979,14 @@ func singleRepoActionCmd(title string, repo gitops.Repo, expectCleanAfter bool, 
 	}
 }
 
-func fetchAllCmd(repos []gitops.Repo) tea.Cmd {
+func updateAllCmd(repos []gitops.Repo) tea.Cmd {
 	snapshot := append([]gitops.Repo(nil), repos...)
 	return func() tea.Msg {
 		logs := make([]string, 0, len(snapshot))
 		processed := 0
+		updated := 0
+		current := 0
+		skipped := 0
 		failures := 0
 
 		for _, repo := range snapshot {
@@ -981,30 +994,57 @@ func fetchAllCmd(repos []gitops.Repo) tea.Cmd {
 				continue
 			}
 			processed++
-			output, err := gitops.Sync(repo)
-			logs = append(logs, formatLogBlock("Fetch All", repo, output, err))
+			result, err := gitops.SyncDetailed(repo)
+			logs = append(logs, formatLogBlock("Update All", repo, result.Output, err))
 			if err != nil {
 				failures++
+				continue
+			}
+
+			switch result.Status {
+			case gitops.SyncStatusUpdated:
+				updated++
+			case gitops.SyncStatusSkipped:
+				skipped++
+			default:
+				current++
 			}
 		}
 
 		switch {
 		case processed == 0:
 			return operationFinishedMsg{status: "No repositories with a remote were found."}
-		case failures > 0:
-			return operationFinishedMsg{
-				status:  fmt.Sprintf("Fetch all completed with %d failures.", failures),
-				logs:    logs,
-				refresh: true,
-			}
 		default:
 			return operationFinishedMsg{
-				status:  fmt.Sprintf("Fetch all completed across %d repositories.", processed),
+				status:  updateAllStatus(processed, updated, current, skipped, failures),
 				logs:    logs,
 				refresh: true,
 			}
 		}
 	}
+}
+
+func updateAllStatus(processed, updated, current, skipped, failures int) string {
+	if failures > 0 {
+		return fmt.Sprintf(
+			"Update all finished: %d updated, %d current, %d skipped, %d failed.",
+			updated,
+			current,
+			skipped,
+			failures,
+		)
+	}
+
+	if skipped > 0 {
+		return fmt.Sprintf(
+			"Update all finished: %d updated, %d current, %d skipped.",
+			updated,
+			current,
+			skipped,
+		)
+	}
+
+	return fmt.Sprintf("Update all finished across %d repositories: %d updated, %d already current.", processed, updated, current)
 }
 
 func bulkCommitPushCmd(repos []gitops.Repo, message string) tea.Cmd {
@@ -1114,7 +1154,7 @@ func (m dashboardModel) renderFullView() string {
 	)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, " ", rightBody)
 
-	footer := styles.help.Render("Arrows move the dashboard. Enter runs the highlighted action. Esc backs out. / filters, d toggles dirty-only, r refreshes, q quits.")
+	footer := styles.help.Render(truncateText(keyHelpText(), m.width))
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -1303,7 +1343,7 @@ func (m dashboardModel) renderCompactBottom(maxLines, width int) []string {
 	}
 
 	if remaining := maxLines - len(lines); remaining > 0 && m.height >= 16 {
-		lines = append(lines, styles.help.Render(truncateText("Arrows move. Enter runs. Esc backs out. / filter. d dirty. r refresh. q quit.", width)))
+		lines = append(lines, styles.help.Render(truncateText(keyHelpText(), width)))
 	}
 
 	if len(lines) > maxLines {
@@ -1593,7 +1633,7 @@ func (m dashboardModel) globalActionButtons() []actionButton {
 		{label: "Filter", enabled: !m.busy},
 		{label: fmt.Sprintf("Dirty: %s", onOffLabel(m.dirtyOnly)), enabled: !m.busy},
 		{label: "Clone", enabled: !m.busy},
-		{label: "Fetch All", enabled: !m.busy && m.hasSyncableRepos()},
+		{label: "Update All", enabled: !m.busy && m.hasSyncableRepos()},
 		{label: "Commit Dirty", enabled: !m.busy && m.hasDirtyRepos()},
 	}
 }
@@ -2121,6 +2161,10 @@ func formatLogBlock(title string, repo gitops.Repo, output string, err error) st
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+func keyHelpText() string {
+	return "Keys ^v<> nav | Enter | Esc | / filter | d dirty | u update | r refresh | q"
 }
 
 func dirtyModeLabel(enabled bool) string {

@@ -43,6 +43,20 @@ type Repo struct {
 	LastError         string
 }
 
+type SyncStatus string
+
+const (
+	SyncStatusCurrent SyncStatus = "current"
+	SyncStatusUpdated SyncStatus = "updated"
+	SyncStatusSkipped SyncStatus = "skipped"
+)
+
+type SyncResult struct {
+	Output string
+	Status SyncStatus
+	Reason string
+}
+
 func Discover(root string) ([]string, error) {
 	root = filepath.Clean(root)
 	info, err := os.Stat(root)
@@ -258,26 +272,54 @@ func Push(repoPath string) (string, error) {
 }
 
 func Sync(repo Repo) (string, error) {
+	result, err := SyncDetailed(repo)
+	return result.Output, err
+}
+
+func SyncDetailed(repo Repo) (SyncResult, error) {
 	var parts []string
+	result := SyncResult{Status: SyncStatusCurrent}
+
+	beforeHead, _ := currentHead(repo.Path)
 
 	fetchOutput, err := Fetch(repo.Path)
 	if fetchOutput != "" {
 		parts = append(parts, fetchOutput)
 	}
 	if err != nil {
-		return trimOutput(strings.Join(parts, "\n")), err
+		result.Output = trimOutput(strings.Join(parts, "\n"))
+		return result, err
 	}
+
+	current := Inspect(repo.Path)
+	if current.LastError != "" {
+		result.Status = SyncStatusSkipped
+		result.Reason = "repository status could not be inspected"
+		parts = append(parts, "Fetched remotes. Skipped fast-forward because repository status could not be inspected: "+current.LastError)
+		result.Output = trimOutput(strings.Join(parts, "\n"))
+		return result, nil
+	}
+	repo = current
 
 	switch {
 	case repo.Upstream == "":
+		result.Status = SyncStatusSkipped
+		result.Reason = "no upstream branch is configured"
 		parts = append(parts, "Fetched remotes. Skipped fast-forward because no upstream branch is configured.")
-		return trimOutput(strings.Join(parts, "\n")), nil
+		result.Output = trimOutput(strings.Join(parts, "\n"))
+		return result, nil
 	case repo.UpstreamGone:
+		result.Status = SyncStatusSkipped
+		result.Reason = "the upstream branch is missing"
 		parts = append(parts, "Fetched remotes. Skipped fast-forward because the upstream branch is missing.")
-		return trimOutput(strings.Join(parts, "\n")), nil
+		result.Output = trimOutput(strings.Join(parts, "\n"))
+		return result, nil
 	case repo.Dirty:
+		result.Status = SyncStatusSkipped
+		result.Reason = "the working tree has local changes"
 		parts = append(parts, "Fetched remotes. Skipped fast-forward because the working tree has local changes.")
-		return trimOutput(strings.Join(parts, "\n")), nil
+		result.Output = trimOutput(strings.Join(parts, "\n"))
+		return result, nil
 	}
 
 	pullOutput, err := Pull(repo.Path)
@@ -285,7 +327,13 @@ func Sync(repo Repo) (string, error) {
 		parts = append(parts, pullOutput)
 	}
 
-	return trimOutput(strings.Join(parts, "\n")), err
+	afterHead, _ := currentHead(repo.Path)
+	if beforeHead != "" && afterHead != "" && beforeHead != afterHead {
+		result.Status = SyncStatusUpdated
+	}
+
+	result.Output = trimOutput(strings.Join(parts, "\n"))
+	return result, err
 }
 
 func CommitAndPush(repoPath, message string) (string, error) {
@@ -307,6 +355,14 @@ func CommitAndPush(repoPath, message string) (string, error) {
 
 func RunGit(repoPath string, args ...string) (string, error) {
 	return runGitCommand(repoPath, args...)
+}
+
+func currentHead(repoPath string) (string, error) {
+	output, err := RunGit(repoPath, "rev-parse", "--verify", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(output), nil
 }
 
 func runGitCommand(repoPath string, args ...string) (string, error) {

@@ -9,7 +9,7 @@ GUITboard is a local-only cross-platform terminal dashboard (TUI) for managing a
 - Shows branch, upstream, ahead/behind, dirty state, last commit details, and an operation log in one split dashboard.
 - Keeps every major workflow on the keyboard: arrow keys move around the dashboard and `Enter` runs the highlighted action.
 - Lets you `Stage`, `Commit`, `Commit+Push`, `Pull`, or `Push` the selected repository from a compact popup-driven flow.
-- Supports `Fetch All`, which fetches every repo with a remote and fast-forwards clean repos that have a usable upstream branch.
+- Supports `Update All`, which fetches every repo with a remote and fast-forwards clean repos that have a usable upstream branch.
 - Supports bulk commit-and-push across every changed repository with one shared commit message.
 - Clones a repository into the current root from either a full Git URL or `owner/repo` shorthand.
 - Refreshes automatically every 30 seconds and stores the selected root folder locally per user.
@@ -130,7 +130,7 @@ sh ../portui/portui.sh --install-project .
 2. Confirm the detected root folder or use the `Root` action to point GUITboard at another directory.
 3. Use the arrow keys to move between dashboard actions, the repository list, and the selected-repo action bar.
 4. Press `Enter` on `Commit+Push` or `Commit Dirty`, type the commit message in the popup, and GUITboard stages and runs the rest.
-5. Use `Fetch All` to refresh the whole folder, `Clone` to add another repo into the root, `/` to filter, `d` to toggle dirty-only mode, and `r` to refresh on demand.
+5. Use `Update All` or press `u` to bring every clean repository up to date with GitHub, `Clone` to add another repo into the root, `/` to filter, `d` to toggle dirty-only mode, and `r` to refresh on demand.
 
 The app remembers the last folder you picked in your user config directory, so it works on any machine without hardcoded personal paths.
 

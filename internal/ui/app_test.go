@@ -149,6 +149,64 @@ func TestRepoActionsSkipDisabledButtons(t *testing.T) {
 	}
 }
 
+func TestGlobalActionsExposeUpdateAll(t *testing.T) {
+	model := newDashboardModel(configStub())
+	model.busy = false
+	model.repos = []gitops.Repo{
+		{
+			Name:   "kapotteke",
+			Path:   "/tmp/kapotteke",
+			Remote: "https://github.com/example/kapotteke.git",
+		},
+	}
+
+	buttons := model.globalActionButtons()
+	if buttons[int(globalActionUpdateAll)].label != "Update All" {
+		t.Fatalf("expected global update action label, got %q", buttons[int(globalActionUpdateAll)].label)
+	}
+	if !buttons[int(globalActionUpdateAll)].enabled {
+		t.Fatal("expected Update All to be enabled when a remote repo exists")
+	}
+}
+
+func TestUpdateAllStatusSummarizesOutcomes(t *testing.T) {
+	status := updateAllStatus(4, 1, 1, 1, 1)
+	want := "Update all finished: 1 updated, 1 current, 1 skipped, 1 failed."
+	if status != want {
+		t.Fatalf("expected %q, got %q", want, status)
+	}
+}
+
+func TestUpdateAllShortcutStartsBatch(t *testing.T) {
+	model := newDashboardModel(configStub())
+	model.busy = false
+	model.repos = []gitops.Repo{
+		{
+			Name:   "kapotteke",
+			Path:   "/tmp/kapotteke",
+			Remote: "https://github.com/example/kapotteke.git",
+		},
+	}
+
+	updated, cmd := model.updateDashboard(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
+	result := updated.(dashboardModel)
+	if !result.busy {
+		t.Fatal("expected Update All shortcut to mark the dashboard busy")
+	}
+	if result.status != "Updating repositories from their remotes..." {
+		t.Fatalf("expected update status, got %q", result.status)
+	}
+	if cmd == nil {
+		t.Fatal("expected Update All shortcut to return a command")
+	}
+}
+
+func TestKeyHelpTextFitsDefaultTerminalWidth(t *testing.T) {
+	if len(keyHelpText()) > 80 {
+		t.Fatalf("expected key help to fit 80 columns, got %d characters", len(keyHelpText()))
+	}
+}
+
 func configStub() config.Config {
 	return config.Config{
 		RootPath:           "/tmp",
