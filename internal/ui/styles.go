@@ -232,6 +232,7 @@ func newPlainUIStyles() uiStyles {
 		actionButton: lipgloss.NewStyle().
 			Padding(0, 1),
 		actionSelected: lipgloss.NewStyle().
+			Bold(true).
 			Underline(true).
 			Padding(0, 1),
 		actionActive: lipgloss.NewStyle().
@@ -245,6 +246,7 @@ func newPlainUIStyles() uiStyles {
 			MarginBottom(1),
 		repoSelected: lipgloss.NewStyle().
 			Bold(true).
+			Reverse(true).
 			BorderStyle(lipgloss.ThickBorder()).
 			BorderLeft(true).
 			BorderTop(false).

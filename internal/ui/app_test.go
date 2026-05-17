@@ -207,6 +207,27 @@ func TestKeyHelpTextFitsDefaultTerminalWidth(t *testing.T) {
 	}
 }
 
+func TestActionButtonLabelAddsVisibleSelectionMarkers(t *testing.T) {
+	if got := actionButtonLabel("Update All", true, true, true); got != "> Update All <" {
+		t.Fatalf("expected focused marker, got %q", got)
+	}
+	if got := actionButtonLabel("Update All", true, false, true); got != "[Update All]" {
+		t.Fatalf("expected selected marker, got %q", got)
+	}
+	if got := actionButtonLabel("Update All", true, true, false); got != "Update All" {
+		t.Fatalf("expected disabled label to stay plain, got %q", got)
+	}
+}
+
+func TestRepoRowNameAddsVisibleSelectionMarker(t *testing.T) {
+	if got := repoRowName("kapotteke", true); got != "> kapotteke" {
+		t.Fatalf("expected selected repo marker, got %q", got)
+	}
+	if got := repoRowName("kapotteke", false); got != "  kapotteke" {
+		t.Fatalf("expected unselected repo spacing, got %q", got)
+	}
+}
+
 func configStub() config.Config {
 	return config.Config{
 		RootPath:           "/tmp",

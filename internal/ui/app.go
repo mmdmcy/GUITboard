@@ -1536,7 +1536,7 @@ func (m dashboardModel) renderRepoRow(repo gitops.Repo, selected bool, width int
 		chips = append(chips, renderBadge(fmt.Sprintf("behind %d", repo.Behind), styles.badgeBehind))
 	}
 
-	nameLine := truncateText(repo.Name, maxInt(16, width-2))
+	nameLine := truncateText(repoRowName(repo.Name, selected), maxInt(16, width-2))
 	metaLine := truncateText(strings.Join([]string{repo.Path, formatTime(repo.LastActivity)}, "  |  "), maxInt(16, width-2))
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -1715,7 +1715,11 @@ func renderSectionPanel(title, body string, width int, active bool) string {
 
 	lines := make([]string, 0, 2)
 	if strings.TrimSpace(title) != "" {
-		lines = append(lines, titleStyle.Width(innerWidth).Render(title))
+		titleText := title
+		if active {
+			titleText = "> " + titleText
+		}
+		lines = append(lines, titleStyle.Width(innerWidth).Render(titleText))
 	}
 	lines = append(lines, lipgloss.NewStyle().Width(innerWidth).Render(body))
 
@@ -1736,16 +1740,30 @@ func renderStatCard(label, value string, width int) string {
 }
 
 func renderActionButton(button actionButton, selected bool, focused bool) string {
+	label := actionButtonLabel(button.label, selected, focused, button.enabled)
 	switch {
 	case !button.enabled:
-		return styles.actionDisabled.Render(button.label)
+		return styles.actionDisabled.Render(label)
 	case selected && focused:
-		return styles.actionActive.Render(button.label)
+		return styles.actionActive.Render(label)
 	case selected:
-		return styles.actionSelected.Render(button.label)
+		return styles.actionSelected.Render(label)
 	default:
-		return styles.actionButton.Render(button.label)
+		return styles.actionButton.Render(label)
 	}
+}
+
+func actionButtonLabel(label string, selected bool, focused bool, enabled bool) string {
+	if !enabled {
+		return label
+	}
+	if selected && focused {
+		return "> " + label + " <"
+	}
+	if selected {
+		return "[" + label + "]"
+	}
+	return label
 }
 
 func firstEnabledActionIndex(buttons []actionButton) (int, bool) {
@@ -1777,6 +1795,13 @@ func previousEnabledActionIndex(buttons []actionButton, current int) (int, bool)
 
 func renderBadge(label string, style lipgloss.Style) string {
 	return style.Render(label)
+}
+
+func repoRowName(name string, selected bool) string {
+	if selected {
+		return "> " + name
+	}
+	return "  " + name
 }
 
 func renderDetailLine(label, value string, width int) string {
