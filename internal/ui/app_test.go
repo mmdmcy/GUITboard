@@ -3,6 +3,7 @@ package ui
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -149,6 +150,47 @@ func TestRepoActionsSkipDisabledButtons(t *testing.T) {
 	}
 }
 
+func TestRepoActionsUpDownMoveBetweenRepos(t *testing.T) {
+	model := newDashboardModel(configStub())
+	model.busy = false
+	model.filtered = []gitops.Repo{
+		{
+			Name:     "first",
+			Path:     "/tmp/first",
+			Remote:   "https://github.com/example/first.git",
+			Upstream: "origin/main",
+		},
+		{
+			Name:     "second",
+			Path:     "/tmp/second",
+			Remote:   "https://github.com/example/second.git",
+			Upstream: "origin/main",
+		},
+	}
+	model.selectedIdx = 0
+	model.selectedPath = "/tmp/first"
+	model.focus = focusRepoActions
+	model.repoActionIdx = int(repoActionPull)
+
+	updated, _ := model.updateDashboard(tea.KeyMsg{Type: tea.KeyDown})
+	afterDown := updated.(dashboardModel)
+	if afterDown.focus != focusRepoActions {
+		t.Fatalf("expected down in repo actions to stay in repo actions, got %v", afterDown.focus)
+	}
+	if afterDown.selectedPath != "/tmp/second" {
+		t.Fatalf("expected down in repo actions to move to second repo, got %q", afterDown.selectedPath)
+	}
+
+	updated, _ = afterDown.updateDashboard(tea.KeyMsg{Type: tea.KeyUp})
+	afterUp := updated.(dashboardModel)
+	if afterUp.focus != focusRepoActions {
+		t.Fatalf("expected up in repo actions to stay in repo actions, got %v", afterUp.focus)
+	}
+	if afterUp.selectedPath != "/tmp/first" {
+		t.Fatalf("expected up in repo actions to move to first repo, got %q", afterUp.selectedPath)
+	}
+}
+
 func TestGlobalActionsExposeUpdateAll(t *testing.T) {
 	model := newDashboardModel(configStub())
 	model.busy = false
@@ -208,23 +250,76 @@ func TestKeyHelpTextFitsDefaultTerminalWidth(t *testing.T) {
 }
 
 func TestActionButtonLabelAddsVisibleSelectionMarkers(t *testing.T) {
-	if got := actionButtonLabel("Update All", true, true, true); got != "> Update All <" {
+	if got := actionButtonLabel("Update All", true, true, true); got != ">> Update All <<" {
 		t.Fatalf("expected focused marker, got %q", got)
 	}
-	if got := actionButtonLabel("Update All", true, false, true); got != "[Update All]" {
+	if got := actionButtonLabel("Update All", true, false, true); got != "[ Update All ]" {
 		t.Fatalf("expected selected marker, got %q", got)
 	}
-	if got := actionButtonLabel("Update All", true, true, false); got != "Update All" {
-		t.Fatalf("expected disabled label to stay plain, got %q", got)
+	if got := actionButtonLabel("Update All", true, true, false); got != ">> Update All <<" {
+		t.Fatalf("expected disabled focused label to keep cursor marker, got %q", got)
 	}
 }
 
 func TestRepoRowNameAddsVisibleSelectionMarker(t *testing.T) {
-	if got := repoRowName("kapotteke", true); got != "> kapotteke" {
+	if got := repoRowName("kapotteke", true, true); got != ">> kapotteke" {
+		t.Fatalf("expected focused selected repo marker, got %q", got)
+	}
+	if got := repoRowName("kapotteke", true, false); got != ">  kapotteke" {
 		t.Fatalf("expected selected repo marker, got %q", got)
 	}
-	if got := repoRowName("kapotteke", false); got != "  kapotteke" {
+	if got := repoRowName("kapotteke", false, false); got != "   kapotteke" {
 		t.Fatalf("expected unselected repo spacing, got %q", got)
+	}
+}
+
+func TestCursorLabelNamesActiveTarget(t *testing.T) {
+	model := newDashboardModel(configStub())
+	model.busy = false
+	model.filtered = []gitops.Repo{
+		{
+			Name:     "kapotteke",
+			Path:     "/tmp/kapotteke",
+			Remote:   "https://github.com/example/kapotteke.git",
+			Upstream: "origin/main",
+		},
+	}
+	model.selectedIdx = 0
+	model.selectedPath = "/tmp/kapotteke"
+	model.focus = focusRepoActions
+	model.repoActionIdx = int(repoActionPull)
+
+	if got := model.cursorLabel(); got != "Repo Actions > Pull on kapotteke" {
+		t.Fatalf("expected cursor label to name action and repo, got %q", got)
+	}
+}
+
+func TestCompactViewKeepsVisibleCursorAndStoredAction(t *testing.T) {
+	model := newDashboardModel(configStub())
+	model.busy = false
+	model.width = 80
+	model.height = 24
+	model.repos = []gitops.Repo{
+		{
+			Name:     "kapotteke",
+			Path:     "/tmp/kapotteke",
+			Remote:   "https://github.com/example/kapotteke.git",
+			Upstream: "origin/main",
+		},
+	}
+	model.filtered = model.repos
+	model.selectedIdx = 0
+	model.selectedPath = "/tmp/kapotteke"
+	model.focus = focusRepoList
+	model.globalActionIdx = int(globalActionRefresh)
+	model.repoActionIdx = int(repoActionPull)
+
+	view := model.View()
+	if !strings.Contains(view, "Cursor: Repositories > kapotteke") {
+		t.Fatalf("expected compact view to show cursor target, got:\n%s", view)
+	}
+	if !strings.Contains(view, "[ Refresh ]") {
+		t.Fatalf("expected compact view to keep the stored dashboard action visible, got:\n%s", view)
 	}
 }
 

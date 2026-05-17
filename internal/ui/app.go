@@ -775,15 +775,16 @@ func (m *dashboardModel) moveUp() {
 		return
 	case focusRepoList:
 		if m.selectedIdx > 0 {
-			m.selectedIdx--
-			m.selectedPath = m.filtered[m.selectedIdx].Path
-			m.normalizeActionFocus()
-			m.ensureRepoVisible()
+			m.moveRepoSelection(-1)
 		} else {
 			m.focus = focusGlobalActions
 		}
 	case focusRepoActions:
-		m.focus = focusRepoList
+		if m.selectedIdx > 0 {
+			m.moveRepoSelection(-1)
+		} else {
+			m.focus = focusRepoList
+		}
 	}
 }
 
@@ -795,14 +796,37 @@ func (m *dashboardModel) moveDown() {
 		}
 	case focusRepoList:
 		if m.selectedIdx >= 0 && m.selectedIdx < len(m.filtered)-1 {
-			m.selectedIdx++
-			m.selectedPath = m.filtered[m.selectedIdx].Path
-			m.normalizeActionFocus()
-			m.ensureRepoVisible()
+			m.moveRepoSelection(1)
 		}
 	case focusRepoActions:
-		m.focus = focusRepoList
+		if m.selectedIdx >= 0 && m.selectedIdx < len(m.filtered)-1 {
+			m.moveRepoSelection(1)
+		} else {
+			m.focus = focusRepoList
+		}
 	}
+}
+
+func (m *dashboardModel) moveRepoSelection(delta int) {
+	if len(m.filtered) == 0 || delta == 0 {
+		return
+	}
+
+	next := m.selectedIdx + delta
+	if next < 0 {
+		next = 0
+	}
+	if next >= len(m.filtered) {
+		next = len(m.filtered) - 1
+	}
+	if next == m.selectedIdx {
+		return
+	}
+
+	m.selectedIdx = next
+	m.selectedPath = m.filtered[m.selectedIdx].Path
+	m.normalizeActionFocus()
+	m.ensureRepoVisible()
 }
 
 func (m *dashboardModel) stepBackFocus() {
@@ -1220,7 +1244,7 @@ func (m dashboardModel) renderCompactContextLine(width int) string {
 }
 
 func (m dashboardModel) renderCompactFocusLine(width int) string {
-	line := "Focus: " + m.focusLabel()
+	line := "Cursor: " + m.cursorLabel()
 	return styles.detailLabel.Render(truncateText(line, width))
 }
 
@@ -1285,7 +1309,7 @@ func (m dashboardModel) renderCompactRepoRow(repo gitops.Repo, selected bool, wi
 		aheadBehind = fmt.Sprintf(" ↑%d ↓%d", repo.Ahead, repo.Behind)
 	}
 
-	line := fmt.Sprintf("%s %s  %s  %s%s", selectionMarker(selected), repo.Name, compactBranch(repo.Branch), statusToken, aheadBehind)
+	line := fmt.Sprintf("%s %s  %s  %s%s", repoCursorMarker(selected, m.focus == focusRepoList), repo.Name, compactBranch(repo.Branch), statusToken, aheadBehind)
 	line = truncateText(line, width)
 
 	switch {
@@ -1366,17 +1390,33 @@ func (m dashboardModel) compactLogPreview() string {
 	return first[0]
 }
 
-func (m dashboardModel) focusLabel() string {
+func (m dashboardModel) cursorLabel() string {
 	switch m.focus {
 	case focusGlobalActions:
-		return "Dashboard Actions"
+		return "Dashboard Actions > " + selectedActionLabel(m.globalActionButtons(), m.globalActionIdx)
 	case focusRepoList:
-		return "Repositories"
+		repo, ok := m.selectedRepo()
+		if !ok {
+			return "Repositories"
+		}
+		return "Repositories > " + repo.Name + " (Enter actions)"
 	case focusRepoActions:
-		return "Repo Actions"
+		repo, ok := m.selectedRepo()
+		action := selectedActionLabel(m.repoActionButtons(), m.repoActionIdx)
+		if !ok {
+			return "Repo Actions > " + action
+		}
+		return "Repo Actions > " + action + " on " + repo.Name
 	default:
 		return "Repositories"
 	}
+}
+
+func selectedActionLabel(buttons []actionButton, index int) string {
+	if index >= 0 && index < len(buttons) && strings.TrimSpace(buttons[index].label) != "" {
+		return buttons[index].label
+	}
+	return "-"
 }
 
 func (m dashboardModel) isCompactLayout() bool {
@@ -1421,7 +1461,9 @@ func (m dashboardModel) renderHeader() string {
 		status,
 	)
 
-	return renderPanel("", line1+"\n"+styles.headerText.Render(truncateText(context, m.width-8)), m.width)
+	cursor := "Cursor: " + m.cursorLabel()
+
+	return renderPanel("", line1+"\n"+styles.headerText.Render(truncateText(context, m.width-8))+"\n"+styles.detailLabel.Render(truncateText(cursor, m.width-8)), m.width)
 }
 
 func (m dashboardModel) renderSummaryRow() string {
@@ -1455,7 +1497,7 @@ func (m dashboardModel) renderWrappedActions(buttons []actionButton, selectedInd
 	currentLine := ""
 
 	for idx, button := range buttons {
-		rendered := renderActionButton(button, idx == selectedIndex && focused, focused)
+		rendered := renderActionButton(button, idx == selectedIndex, focused)
 		candidate := rendered
 		if currentLine != "" {
 			candidate = currentLine + " " + rendered
@@ -1536,7 +1578,7 @@ func (m dashboardModel) renderRepoRow(repo gitops.Repo, selected bool, width int
 		chips = append(chips, renderBadge(fmt.Sprintf("behind %d", repo.Behind), styles.badgeBehind))
 	}
 
-	nameLine := truncateText(repoRowName(repo.Name, selected), maxInt(16, width-2))
+	nameLine := truncateText(repoRowName(repo.Name, selected, m.focus == focusRepoList), maxInt(16, width-2))
 	metaLine := truncateText(strings.Join([]string{repo.Path, formatTime(repo.LastActivity)}, "  |  "), maxInt(16, width-2))
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -1754,14 +1796,11 @@ func renderActionButton(button actionButton, selected bool, focused bool) string
 }
 
 func actionButtonLabel(label string, selected bool, focused bool, enabled bool) string {
-	if !enabled {
-		return label
-	}
 	if selected && focused {
-		return "> " + label + " <"
+		return ">> " + label + " <<"
 	}
 	if selected {
-		return "[" + label + "]"
+		return "[ " + label + " ]"
 	}
 	return label
 }
@@ -1797,11 +1836,14 @@ func renderBadge(label string, style lipgloss.Style) string {
 	return style.Render(label)
 }
 
-func repoRowName(name string, selected bool) string {
-	if selected {
-		return "> " + name
+func repoRowName(name string, selected bool, focused bool) string {
+	if selected && focused {
+		return ">> " + name
 	}
-	return "  " + name
+	if selected {
+		return ">  " + name
+	}
+	return "   " + name
 }
 
 func renderDetailLine(label, value string, width int) string {
@@ -1915,7 +1957,10 @@ func splitNonEmptyLines(value string) []string {
 	return filtered
 }
 
-func selectionMarker(selected bool) string {
+func repoCursorMarker(selected bool, focused bool) string {
+	if selected && focused {
+		return ">>"
+	}
 	if selected {
 		return ">"
 	}
@@ -2189,7 +2234,7 @@ func formatLogBlock(title string, repo gitops.Repo, output string, err error) st
 }
 
 func keyHelpText() string {
-	return "Keys ^v<> nav | Enter | Esc | / filter | d dirty | u update | r refresh | q"
+	return "Up/Down rows | Left/Right actions | Enter select/run | Esc back | / d u r q"
 }
 
 func dirtyModeLabel(enabled bool) string {
