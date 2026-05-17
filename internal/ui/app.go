@@ -1174,7 +1174,7 @@ func (m dashboardModel) renderFullView() string {
 		lipgloss.Left,
 		renderSectionPanel("Selected Repository", m.renderSelectedRepo(layout.rightWidth), layout.rightWidth, false),
 		renderSectionPanel("Repo Actions", m.renderRepoActionRows(layout.rightWidth), layout.rightWidth, m.focus == focusRepoActions),
-		renderSectionPanel("Operation Log", m.renderLogBlocks(layout.logLines), layout.rightWidth, false),
+		renderSectionPanel("Latest Operation", m.renderLogPreview(layout.rightWidth), layout.rightWidth, false),
 	)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, " ", rightBody)
 
@@ -1426,18 +1426,15 @@ func (m dashboardModel) isCompactLayout() bool {
 type dashboardLayout struct {
 	leftWidth  int
 	rightWidth int
-	logLines   int
 }
 
 func (m dashboardModel) layout() dashboardLayout {
 	leftWidth := maxInt(38, minInt(52, m.width*42/100))
 	rightWidth := maxInt(42, m.width-leftWidth-1)
-	logLines := maxInt(8, m.height-26)
 
 	return dashboardLayout{
 		leftWidth:  leftWidth,
 		rightWidth: rightWidth,
-		logLines:   logLines,
 	}
 }
 
@@ -1617,34 +1614,12 @@ func (m dashboardModel) renderSelectedRepo(width int) string {
 	return strings.Join(lines, "\n")
 }
 
-func (m dashboardModel) renderLogBlocks(maxLines int) string {
+func (m dashboardModel) renderLogPreview(width int) string {
+	text := m.compactLogPreview()
 	if len(m.logs) == 0 {
-		return styles.emptyState.Render("No git operations have been run yet.")
+		return styles.emptyState.Render(truncateText(text, maxInt(1, width-styles.panel.GetHorizontalFrameSize())))
 	}
-
-	var blocks []string
-	linesLeft := maxLines
-
-	for _, block := range m.logs {
-		blockLines := strings.Split(block, "\n")
-		if len(blockLines) > linesLeft {
-			if linesLeft <= 0 {
-				break
-			}
-			blocks = append(blocks, strings.Join(blockLines[:linesLeft], "\n"))
-			linesLeft = 0
-			break
-		}
-
-		blocks = append(blocks, block)
-		linesLeft -= len(blockLines)
-		if linesLeft <= 1 {
-			break
-		}
-		linesLeft--
-	}
-
-	return strings.Join(blocks, "\n\n")
+	return styles.detailValue.Render(truncateText(text, maxInt(1, width-styles.panel.GetHorizontalFrameSize())))
 }
 
 func (m dashboardModel) renderModal() string {

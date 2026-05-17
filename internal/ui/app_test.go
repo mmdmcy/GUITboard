@@ -323,6 +323,25 @@ func TestCompactViewKeepsVisibleCursorAndStoredAction(t *testing.T) {
 	}
 }
 
+func TestLogPreviewOnlyShowsLatestSingleLine(t *testing.T) {
+	model := newDashboardModel(configStub())
+	model.logs = []string{
+		"[2026-05-17 12:00:00] Update All  GUITboard\nC:/repo/GUITboard\nLots\nOf\nOutput\nCompleted successfully.",
+		"[2026-05-17 11:00:00] Pull  Other\nOlder output",
+	}
+
+	preview := model.renderLogPreview(80)
+	if strings.Contains(preview, "\n") {
+		t.Fatalf("expected log preview to stay on one line, got %q", preview)
+	}
+	if !strings.Contains(preview, "Update All  GUITboard") {
+		t.Fatalf("expected latest operation summary, got %q", preview)
+	}
+	if strings.Contains(preview, "Lots") || strings.Contains(preview, "Older output") {
+		t.Fatalf("expected log preview to omit verbose output, got %q", preview)
+	}
+}
+
 func configStub() config.Config {
 	return config.Config{
 		RootPath:           "/tmp",
