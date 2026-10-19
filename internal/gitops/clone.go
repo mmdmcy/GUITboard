@@ -41,7 +41,9 @@ func Clone(repoURL, destinationRoot, dirName string) (string, string, error) {
 		return targetPath, "", err
 	}
 
-	output, err := runGitCommand("", "clone", source, targetPath)
+	// "--" keeps a source such as "--upload-pack=cmd" from being parsed as a
+	// git option; the source itself is also refused in normalizeCloneSource.
+	output, err := runGitCommand("", "clone", "--", source, targetPath)
 	return targetPath, output, err
 }
 
@@ -86,6 +88,9 @@ func normalizeCloneSource(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return "", errors.New("repository URL cannot be empty")
+	}
+	if strings.HasPrefix(trimmed, "-") {
+		return "", errors.New("repository URL cannot start with '-'")
 	}
 
 	if _, err := os.Stat(trimmed); err == nil {
