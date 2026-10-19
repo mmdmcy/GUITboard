@@ -430,3 +430,22 @@ func writeFile(t *testing.T, path, contents string) {
 		t.Fatalf("failed to write file: %v", err)
 	}
 }
+
+func TestCloneRejectsOptionLikeSource(t *testing.T) {
+	root := t.TempDir()
+	for _, source := range []string{"--upload-pack=touch pwned", "-c", " --config=core.hooksPath=/x"} {
+		targetPath, _, err := Clone(source, root, "")
+		if err == nil {
+			t.Fatalf("expected Clone(%q) to be rejected", source)
+		}
+		if !strings.Contains(err.Error(), "cannot start with '-'") {
+			t.Fatalf("expected option-like source error for %q, got %v", source, err)
+		}
+		if targetPath != "" {
+			t.Fatalf("expected no target path for rejected source %q, got %q", source, targetPath)
+		}
+	}
+	if _, err := normalizeCloneSource("--upload-pack=x"); err == nil {
+		t.Fatalf("expected normalizeCloneSource to reject an option-like source")
+	}
+}
