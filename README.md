@@ -74,6 +74,18 @@ eval "$(/opt/homebrew/bin/brew shellenv)"
 echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
 ```
 
+## Install the `guitboard` command
+
+To start GUITboard from any folder, install it with Go:
+
+```bash
+go install ./cmd/guitboard
+```
+
+Go puts it in `$(go env GOPATH)/bin` (usually `~/go/bin`), or in `GOBIN` when
+set, for example `GOBIN="$HOME/.local/bin" go install ./cmd/guitboard`. Run
+`guitboard`; run the same command again after updating the checkout.
+
 ## Optional Local Build
 
 This is secondary. The normal portable workflow is to clone the repo and run the TUI through Go or the repo-local PortUI launchers.
