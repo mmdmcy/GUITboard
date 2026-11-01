@@ -1163,28 +1163,54 @@ func (m dashboardModel) View() string {
 	return base
 }
 
+// The parts of the full view whose size does not depend on how many
+// repositories are listed.
+func (m dashboardModel) renderFullTop() string {
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		m.renderHeader(),
+		renderSectionPanel("Dashboard Actions", m.renderGlobalActionRows(m.width), m.width, m.focus == focusGlobalActions),
+		m.renderSummaryRow(),
+	)
+}
+
+func (m dashboardModel) renderRightColumn(width int) string {
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		renderSectionPanel("Selected Repository", m.renderSelectedRepo(width), width, false),
+		renderSectionPanel("Repo Actions", m.renderRepoActionRows(width), width, m.focus == focusRepoActions),
+		renderSectionPanel("Latest Operation", m.renderLogPreview(width), width, false),
+	)
+}
+
+// fullBodyHeight is the height left for the repository list and the right
+// column under the full view's top, above its one-line footer.
+func (m dashboardModel) fullBodyHeight() int {
+	return m.height - lipgloss.Height(m.renderFullTop()) - 1
+}
+
+// listChrome is what the full view's repository panel takes besides its
+// rows (three lines each): border 2, margin 1, title 2, the count line 2 and
+// the "more below" line 2.
+const listChrome = 9
+
+// fullListRows is how many repositories the full view's list has room for.
+func (m dashboardModel) fullListRows() int {
+	return (m.fullBodyHeight() - listChrome) / 3
+}
+
 func (m dashboardModel) renderFullView() string {
-	header := m.renderHeader()
-	actions := renderSectionPanel("Dashboard Actions", m.renderGlobalActionRows(m.width), m.width, m.focus == focusGlobalActions)
-	stats := m.renderSummaryRow()
+	top := m.renderFullTop()
 
 	layout := m.layout()
 	leftPanel := renderSectionPanel("Repositories", m.renderRepoList(layout.leftWidth), layout.leftWidth, m.focus == focusRepoList)
-	rightBody := lipgloss.JoinVertical(
-		lipgloss.Left,
-		renderSectionPanel("Selected Repository", m.renderSelectedRepo(layout.rightWidth), layout.rightWidth, false),
-		renderSectionPanel("Repo Actions", m.renderRepoActionRows(layout.rightWidth), layout.rightWidth, m.focus == focusRepoActions),
-		renderSectionPanel("Latest Operation", m.renderLogPreview(layout.rightWidth), layout.rightWidth, false),
-	)
-	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, " ", rightBody)
+	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, " ", m.renderRightColumn(layout.rightWidth))
 
 	footer := styles.help.Render(truncateText(keyHelpText(), m.width))
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
-		header,
-		actions,
-		stats,
+		top,
 		body,
 		footer,
 	)
@@ -1216,6 +1242,9 @@ func (m dashboardModel) renderCompactView() string {
 	lines = append(lines, repoSection...)
 	lines = append(lines, bottomLines...)
 
+	// Some entries are rendered blocks of several lines: cap what reaches
+	// the screen, not the number of entries.
+	lines = strings.Split(strings.Join(lines, "\n"), "\n")
 	if len(lines) > m.height {
 		lines = lines[:m.height]
 	}
@@ -1419,8 +1448,14 @@ func selectedActionLabel(buttons []actionButton, index int) string {
 	return "-"
 }
 
+// The full view is used when it fits: its right column and at least three
+// repositories under the top part, which is measured, not assumed.
 func (m dashboardModel) isCompactLayout() bool {
-	return m.width < 96 || m.height < 28
+	if m.width < 96 || m.height < 28 {
+		return true
+	}
+	body := m.fullBodyHeight()
+	return body < lipgloss.Height(m.renderRightColumn(m.layout().rightWidth)) || (body-listChrome)/3 < 3
 }
 
 type dashboardLayout struct {
@@ -1465,7 +1500,7 @@ func (m dashboardModel) renderHeader() string {
 
 func (m dashboardModel) renderSummaryRow() string {
 	total, dirty, ahead, behind := m.summaryCounts()
-	cardWidth := maxInt(18, (m.width-3)/4)
+	cardWidth := maxInt(18, m.width/4)
 
 	cards := []string{
 		renderStatCard("Repositories", fmt.Sprintf("%d", total), cardWidth),
@@ -1713,7 +1748,7 @@ func (m dashboardModel) visibleRepoCount() int {
 		return maxInt(3, m.height-reserved)
 	}
 
-	return maxInt(5, (m.height-17)/3)
+	return maxInt(1, m.fullListRows())
 }
 
 func renderSectionPanel(title, body string, width int, active bool) string {
@@ -1740,7 +1775,9 @@ func renderSectionPanel(title, body string, width int, active bool) string {
 	}
 	lines = append(lines, lipgloss.NewStyle().Width(innerWidth).Render(body))
 
-	return panelStyle.Width(panelWidth).Render(strings.Join(lines, "\n"))
+	// lipgloss's Width leaves the border out: subtract it so the panel is
+	// panelWidth wide on screen.
+	return panelStyle.Width(panelWidth - panelStyle.GetHorizontalBorderSize()).Render(strings.Join(lines, "\n"))
 }
 
 func renderPanel(title, body string, width int) string {
@@ -1753,7 +1790,8 @@ func renderStatCard(label, value string, width int) string {
 		styles.statLabel.Render(label),
 		styles.statValue.Render(value),
 	)
-	return styles.statCard.Width(width).Render(body)
+	// width is the card's whole share of the row, border and margin included.
+	return styles.statCard.Width(width - styles.statCard.GetHorizontalBorderSize() - styles.statCard.GetHorizontalMargins()).Render(body)
 }
 
 func renderActionButton(button actionButton, selected bool, focused bool) string {
