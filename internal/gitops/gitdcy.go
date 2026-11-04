@@ -103,7 +103,9 @@ func gitdcyCheckouts(program string, update bool, paths []string) ([]gitdcyCheck
 		}
 		return nil, fmt.Errorf("gitdcy's answer could not be read: %w", err)
 	}
-	if answer.SchemaVersion != "linuxmice.response.v1" || answer.Component != "katteke.gitdcy" {
+	// gitdcy answers in its gitdcy.response.v1 envelope; older releases gave
+	// the same envelope another prefix, so only the version is checked.
+	if !strings.HasSuffix(answer.SchemaVersion, ".response.v1") || answer.Component != "katteke.gitdcy" {
 		return nil, errors.New("gitdcy answered in a format GUITboard does not know")
 	}
 	if answer.Error != nil {
