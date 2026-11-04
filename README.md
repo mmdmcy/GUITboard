@@ -13,6 +13,7 @@ GUITboard is a local-only cross-platform terminal dashboard (TUI) for managing a
 - Supports bulk commit-and-push across every changed repository with one shared commit message.
 - Clones a repository into the current root from either a full Git URL or `owner/repo` shorthand.
 - Refreshes automatically every 30 seconds and stores the selected root folder locally per user.
+- Reads repositories through [GitDCY](https://github.com/mmdmcy/gitdcy) when it is installed (see [With GitDCY](#with-gitdcy)), and with git itself otherwise.
 - Defaults to common Git roots such as `Documents/GitHub` on Windows and `~/Documents/github`, `~/Developer`, or `~/Code` on Unix-like systems.
 
 ## Requirements
@@ -145,6 +146,17 @@ sh ../portui/portui.sh --install-project .
 5. Use `Update All` or press `u` to bring every clean repository up to date with GitHub, `Clone` to add another repo into the root, `/` to filter, `d` to toggle dirty-only mode, and `r` to refresh on demand.
 
 The app remembers the last folder you picked in your user config directory, so it works on any machine without hardcoded personal paths.
+
+## With GitDCY
+
+When GitDCY is installed with its `checkouts` command, GUITboard reads every
+repository through `gitdcy checkouts --no-fetch --format json`, and `Update All`
+runs `gitdcy checkouts update`, so GUITboard and GitDCY show the same picture
+from one engine. GitDCY fast-forwards only a repository that is behind with no
+local changes and no local commits. The status line says which engine read the
+repositories (`read by gitdcy` or `read by git`). Without GitDCY, or with
+`GUITBOARD_GITDCY=off`, GUITboard runs git itself as before. Single-repository
+actions (Stage, Commit, Pull, Push) always run git directly.
 
 ## Local-only behavior
 
