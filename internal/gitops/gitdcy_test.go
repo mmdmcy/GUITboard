@@ -43,7 +43,7 @@ func fakeGitdcy(t *testing.T, answer string) (program, argsFile string) {
 }
 
 func envelope(checkouts string) string {
-	return `{"schema_version":"linuxmice.response.v1","component":"katteke.gitdcy","operation":"checkouts","outcome":"success","data":{"checkouts":[` + checkouts + `]},"warnings":[],"error":null,"correlation_id":"t"}`
+	return `{"schema_version":"gitdcy.response.v1","component":"katteke.gitdcy","operation":"checkouts","outcome":"success","data":{"checkouts":[` + checkouts + `]},"warnings":[],"error":null,"correlation_id":"t"}`
 }
 
 func readArgs(t *testing.T, path string) []string {
@@ -131,6 +131,15 @@ func TestUpdateAllRunsGitdcyUpdateOnceAndSaysWhatHappened(t *testing.T) {
 	}
 	if results[3].Err == nil || results[3].Err.Error() != "could not resolve host" {
 		t.Fatalf("a failed fetch should be a failure: %+v", results[3])
+	}
+}
+
+func TestAnOlderGitdcysEnvelopeIsStillRead(t *testing.T) {
+	answer := strings.Replace(envelope(`{"path":"/r/a","state":"current","branch":"main"}`), `"gitdcy.response.v1"`, `"older.response.v1"`, 1)
+	program, _ := fakeGitdcy(t, answer)
+	useGitdcy(t, program)
+	if repo := Inspect("/r/a"); repo.LastError != "" || repo.Branch != "main" {
+		t.Fatalf("an older release's envelope should be read the same: %+v", repo)
 	}
 }
 
