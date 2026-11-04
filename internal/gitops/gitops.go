@@ -123,6 +123,21 @@ func Scan(root string) ([]Repo, error) {
 		return []Repo{}, nil
 	}
 
+	var repos []Repo
+	if program := gitdcyProgram(); program != "" {
+		repos, err = readWithGitdcy(program, paths)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		repos = inspectAll(paths)
+	}
+	sortRepos(repos)
+	return repos, nil
+}
+
+// inspectAll reads every repository with git, a few at a time.
+func inspectAll(paths []string) []Repo {
 	repos := make([]Repo, len(paths))
 	type job struct {
 		index int
@@ -141,7 +156,7 @@ func Scan(root string) ([]Repo, error) {
 		go func() {
 			defer wg.Done()
 			for work := range jobs {
-				repos[work.index] = Inspect(work.path)
+				repos[work.index] = inspectWithGit(work.path)
 			}
 		}()
 	}
@@ -151,7 +166,11 @@ func Scan(root string) ([]Repo, error) {
 	}
 	close(jobs)
 	wg.Wait()
+	return repos
+}
 
+// sortRepos puts the most recent activity first, then dirty ones, then by name.
+func sortRepos(repos []Repo) {
 	sort.Slice(repos, func(i, j int) bool {
 		left := repos[i]
 		right := repos[j]
@@ -166,11 +185,21 @@ func Scan(root string) ([]Repo, error) {
 			return strings.ToLower(left.Name) < strings.ToLower(right.Name)
 		}
 	})
-
-	return repos, nil
 }
 
+// Inspect reads one repository: through gitdcy when it is installed, else with git.
 func Inspect(repoPath string) Repo {
+	if program := gitdcyProgram(); program != "" {
+		repos, err := readWithGitdcy(program, []string{repoPath})
+		if err != nil {
+			return Repo{Name: filepath.Base(repoPath), Path: repoPath, LastError: err.Error()}
+		}
+		return repos[0]
+	}
+	return inspectWithGit(repoPath)
+}
+
+func inspectWithGit(repoPath string) Repo {
 	repo := Repo{
 		Name: filepath.Base(repoPath),
 		Path: repoPath,
@@ -201,12 +230,20 @@ func Inspect(repoPath string) Repo {
 		repo.Remote = strings.TrimSpace(remoteOutput)
 	}
 
+	finishRepo(&repo)
+	return repo
+}
+
+// finishRepo sets what both engines derive the same way: last activity
+// (the newest of the last commit and the changed files) and the defaults
+// shown for a repository without commits or branch.
+func finishRepo(repo *Repo) {
 	repo.LastActivity = repo.LastCommitTime
-	if changedTime := latestChangedFileTime(repoPath, changedPaths); changedTime.After(repo.LastActivity) {
+	if changedTime := latestChangedFileTime(repo.Path, repo.ChangedFiles); changedTime.After(repo.LastActivity) {
 		repo.LastActivity = changedTime
 	}
 	if repo.LastActivity.IsZero() {
-		if info, err := os.Stat(repoPath); err == nil {
+		if info, err := os.Stat(repo.Path); err == nil {
 			repo.LastActivity = info.ModTime().Local()
 		}
 	}
@@ -216,8 +253,6 @@ func Inspect(repoPath string) Repo {
 	if repo.Branch == "" {
 		repo.Branch = "(unknown)"
 	}
-
-	return repo
 }
 
 func shouldSkipDiscoveryDir(name string) bool {
@@ -400,6 +435,30 @@ func runCLICommand(name string, timeout time.Duration, env []string, args ...str
 	return trimmed, nil
 }
 
+// runCLICommandStdout is runCLICommand for a program that answers in JSON:
+// standard output alone, with standard error only in the error.
+func runCLICommandStdout(name string, timeout time.Duration, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, name, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if ctx.Err() == context.DeadlineExceeded {
+		return stdout.String(), fmt.Errorf("%s took longer than %s and was stopped", filepath.Base(name), timeout)
+	}
+	if err != nil {
+		if said := trimOutput(stderr.String()); said != "" {
+			return stdout.String(), fmt.Errorf("%w: %s", err, said)
+		}
+		return stdout.String(), err
+	}
+	return stdout.String(), nil
+}
+
 func parseStatus(repo *Repo, output string) []string {
 	lines := strings.Split(strings.ReplaceAll(output, "\r\n", "\n"), "\n")
 	var changedPaths []string
@@ -425,31 +484,38 @@ func parseStatus(repo *Repo, output string) []string {
 		if path != "" {
 			changedPaths = append(changedPaths, path)
 		}
-
-		repo.Dirty = true
-		repo.ChangedCount++
-
-		switch status {
-		case "??":
-			repo.UntrackedCount++
-			continue
-		case "!!":
-			repo.ChangedCount--
-			continue
-		}
-
-		if strings.Contains(status, "U") || status == "AA" || status == "DD" {
-			repo.ConflictedCount++
-		}
-		if status[0] != ' ' {
-			repo.StagedCount++
-		}
-		if status[1] != ' ' {
-			repo.UnstagedCount++
-		}
+		tallyStatus(repo, status)
 	}
 
 	return changedPaths
+}
+
+// tallyStatus counts one changed file by its two-letter porcelain status.
+func tallyStatus(repo *Repo, status string) {
+	if len(status) != 2 {
+		return
+	}
+	repo.Dirty = true
+	repo.ChangedCount++
+
+	switch status {
+	case "??":
+		repo.UntrackedCount++
+		return
+	case "!!":
+		repo.ChangedCount--
+		return
+	}
+
+	if strings.Contains(status, "U") || status == "AA" || status == "DD" {
+		repo.ConflictedCount++
+	}
+	if status[0] != ' ' {
+		repo.StagedCount++
+	}
+	if status[1] != ' ' {
+		repo.UnstagedCount++
+	}
 }
 
 func parseBranchHeader(repo *Repo, header string) {

@@ -258,7 +258,7 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = m.postRefreshStatus
 			m.postRefreshStatus = ""
 		} else {
-			m.status = fmt.Sprintf("Loaded %d repositories from %s", len(m.repos), valueOrDash(m.cfg.RootPath))
+			m.status = fmt.Sprintf("Loaded %d repositories from %s (read by %s)", len(m.repos), valueOrDash(m.cfg.RootPath), gitops.Engine())
 		}
 		return m, nil
 
@@ -1013,13 +1013,17 @@ func updateAllCmd(repos []gitops.Repo) tea.Cmd {
 		skipped := 0
 		failures := 0
 
+		withRemote := make([]gitops.Repo, 0, len(snapshot))
 		for _, repo := range snapshot {
-			if strings.TrimSpace(repo.Remote) == "" {
-				continue
+			if strings.TrimSpace(repo.Remote) != "" {
+				withRemote = append(withRemote, repo)
 			}
+		}
+
+		for _, done := range gitops.UpdateAll(withRemote) {
 			processed++
-			result, err := gitops.SyncDetailed(repo)
-			logs = append(logs, formatLogBlock("Update All", repo, result.Output, err))
+			result, err := done.Result, done.Err
+			logs = append(logs, formatLogBlock("Update All", done.Repo, result.Output, err))
 			if err != nil {
 				failures++
 				continue
